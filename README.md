@@ -69,6 +69,7 @@ pip3 install opencv-python
    print(cv2.__version__)
   ```
 ## Installing MediaPipe on your local machine instructions
+### Python version must be in-between 3.7 - 3.11 to be able to use MediaPipe
 ### Instructions for MacBook, assuming you have an active Python environment, and you have created an OpenCV project in VSCode.
 1. Ensure that your virtual environment is activated
 ```bash
