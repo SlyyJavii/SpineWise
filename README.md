@@ -42,6 +42,33 @@ git push
 - Set the base branch to `dev`
 - Add a clear title + short description
 7. Once it is ready and dev members review and approve, merge it into the dev branch
-- Do not merge into `main` branch
-- `dev` is for combining features during the sprint
+  - Do not merge into `main` branch
+  - `dev` is for combining features during the sprint
+
+##Installing OpenCV on your local machine instructions
+### Instructions for MacBook, assuming you already have Homebrew, Python, and pip installed
+1. In terminal run:
+```bash
+pip3 install opencv-python
+```
+  - When you do this step, you may run into an error called externally-managed environment. Here is how to fix that error:
+  - 1. Create a new virtual environment:
+    ```bash
+      python3 -m venv opencv-env
+    ```
+2. Install OpenCV using pip install:
+  ```bash
+   pip install opencv-python
+  ```
+- You can update to the latest version of pip with the command:
+  ```bash
+  pip install --upgrade pip
+  ```
+3. Check if it was installed and look at the version number using:
+  ```bash
+   print(cv2.__version__)
+  ```
+
+
+
 
