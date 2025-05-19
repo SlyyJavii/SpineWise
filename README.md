@@ -45,7 +45,7 @@ git push
   - Do not merge into `main` branch
   - `dev` is for combining features during the sprint
 
-##Installing OpenCV on your local machine instructions
+## Installing OpenCV on your local machine instructions
 ### Instructions for MacBook, assuming you already have Homebrew, Python, and pip installed
 1. In terminal run:
 ```bash
@@ -68,6 +68,23 @@ pip3 install opencv-python
   ```bash
    print(cv2.__version__)
   ```
+## Installing MediaPipe on your local machine instructions
+### Instructions for MacBook, assuming you have an active Python environment, and you have created an OpenCV project in VSCode.
+1. Ensure that your virtual environment is activated
+```bash
+source opencv-env/bin/activate
+```
+2. Install MediaPipe
+```bash
+pip install mediapipe
+```
+3. Import mediapipe in your Python file
+```bash
+import mediapipe as mp
+```
+4. Since we are going to be tracking the body, we should import the ``mp_pose.Pose()`` for body tracking
+
+
 
 
 
