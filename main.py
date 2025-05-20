@@ -1,76 +1,119 @@
 import cv2 as cv 
-# We are importing cv2 and giving it a shorthand called cv
 import mediapipe as mp
-#We are importing mediapipe and giving it a shorthand called mp
+import math 
+
+# Initialize MediaPipe modules
 mp_drawing = mp.solutions.drawing_utils
-#Contains tools to draw landmarks on the body
 mp_pose = mp.solutions.pose
-#The module for detecting human body pose(shoulders,spine,etc.)
+
+# Function to calculate angle between two vectors
+def calculate_angle(v1, v2):
+    dot = v1[0]*v2[0] + v1[1]*v2[1]
+    mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+    mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+    angle_rad = math.acos(dot / (mag1 * mag2))
+    return math.degrees(angle_rad)
+
+# Open webcam
 cap = cv.VideoCapture(0)
-#Opens your default webcam
-#0 Means the first camera device
-with mp_pose.Pose(min_detection_confidence = 0.5,
-                  min_tracking_confidence = 0.5) as pose:
-#Creates a pose estimation object using MediaPipe
-#min_detection_confidence = 0.5: How confident it must be to detect a person
-#Explanation for the selection of 0.5:
-#0.0 Accepts everything (Even very uncertain detections)
-#1.0 only accepts detections that are 100% confident. 
-#min_tracking_confidence = 0.5: How confident it must be to keep tracking landmarks from frame
-#frame
+
+with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+    mode = "front"  # Default mode
     while cap.isOpened():
-#Starts a loop to keep reading from the webcam, as long as it is open.
-        success,frame = cap.read()
-        #.read() is a method that grabs the next video frame from the camera and returns two values:
-        #success: a boolean that will be true if a frame was successfully read, or false otherwise
-        #frame: the actual image captured from the webcame as a NumPy array 
+        success, frame = cap.read()
         if not success:
             print("Ignoring empty frame")
             continue
-#Cap.read() grabs a frame from the webcame
-#If it fails, we will skip that frame. 
+
+        # Convert color and prepare image
         image = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
         image.flags.writeable = False
-#In a variable called image, we are storing the converted color version of the frame.
-#cvt.Color() is an OpenCV function that stands for "convert color" | It is used to change the color space of an image (e.g. BGR -> RGB)
-#frame | The input image to convert. The image just grabbed from the webcam using line 23.
-#By default, OpenCV will give you the image in BGR format (Blue-Green-Red) not the usual RGB
-#cv.COLOR_BGR2RGB is a constant defined by OpenCV, that tells cvt to convert from BGR color format to RGB.
-#.flags is a special attribute of NumPY arrays. It gives you access to various internal memory settings and properties of the array such
-# as: whether it is writeable, whether it is aligned in memory, whether it is contiguous 
-        results = pose.process(image) #Sends the image to the pose model. results contains all of the landmarks(shoulders, knees, etc.)
-        # .landmark gives you a list of 33 landmark objects, each with x, y, z, and visibility
-        
-        image.flags.writeable = True  #Sets the image to writeable again so that we can draw on it. 
-        image = cv.cvtColor(image,cv.COLOR_RGB2BGR) #Convert back to BGR because OpenCV needs that format to display.
-        if results.pose_landmarks: #Conditional Statement. we are checking if the pose landmarks exist in the results object. 
-            landmarks = results.pose_landmarks.landmark #Get the full list of landmark points and store it in a variable called landmarks.
+        results = pose.process(image)
+        image.flags.writeable = True
+        image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
 
-            left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER] #Get the landmark object for the left shoulder by its list index in landmarks, and store
-            #it in the variable called left_shoulder. 
-            right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER] #Get the landmark object for the right shoulder by its list index in landmarks, and store 
-            #it in the variable called right_shoulder. 
-            left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP] #Get the landmark object for the left hip by its list index in landmarks, and store it in the variable
-            #called left_hip.
-            right_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP] #Get the landmark object for the right hip by its list index in landmarks, and store it in the variable
-            #called right_hip.
+        if results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
 
-            #print the x,y,and z values of the shoulders and hips with a label. 
+            # Get landmarks
+            left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
+            left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
+            left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
+            right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+            right_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
+
+            # Adjust shoulder position using ear height
+            adjusted_left_shoulder_y = (left_shoulder.y + left_ear.y) / 2
+            adjusted_left_shoulder = [left_shoulder.x, adjusted_left_shoulder_y]
+
+            # Calculate torso vector and vertical reference
+            torso_vector = [
+                adjusted_left_shoulder[0] - left_hip.x,
+                adjusted_left_shoulder[1] - left_hip.y
+            ]
+            vertical_vector = [0, -1]
+
+            # Compute slouch angle and Z-depth difference
+            slouch_angle = calculate_angle(torso_vector, vertical_vector)
+            z_diff = left_shoulder.z - left_hip.z
+
+            # Classify posture based on current mode
+            if mode == "front":
+                if slouch_angle > 35 or z_diff < -0.2:
+                    posture_status = "Slouching!"
+                    color = (0, 0, 255)
+                elif slouch_angle > 25 or z_diff < -0.12:
+                    posture_status = "Moderate Slouch"
+                    color = (0, 165, 255)
+                elif slouch_angle > 15:
+                    posture_status = "Slight Lean"
+                    color = (0, 255, 255)
+                else:
+                    posture_status = "Great Posture!"
+                    color = (0, 255, 0)
+            else:  # side view
+                if z_diff < -0.25:
+                    posture_status = "Hunched Forward"
+                    color = (0, 0, 255)
+                elif z_diff < -0.15:
+                    posture_status = "Moderate Forward Lean"
+                    color = (0, 165, 255)
+                elif z_diff < -0.07:
+                    posture_status = "Slight Lean"
+                    color = (0, 255, 255)
+                else:
+                    posture_status = "Good Side Posture"
+                    color = (0, 255, 0)
+
+            # Draw pose landmarks
+            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+            # Display posture info
+            cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv.putText(image, posture_status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+            # Debugging prints
             print("Left shoulder:", left_shoulder.x, left_shoulder.y, left_shoulder.z)
             print("Right shoulder:", right_shoulder.x, right_shoulder.y, right_shoulder.z)
             print("Left hip:", left_hip.x, left_hip.y, left_hip.z)
             print("Right hip:", right_hip.x, right_hip.y, right_hip.z)
 
+        # Show the image
+        cv.imshow('Posture Detection', image)
 
-            mp_drawing.draw_landmarks(
-                image,results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-        # Display the image 
-        cv.imshow('Posture Detection',image)
-
-        if cv.waitKey(5) & 0xFF == 27: #Press escape to exit 
+        # Handle key inputs
+        key = cv.waitKey(5) & 0xFF
+        if key == 27:  # ESC key to exit
             break
+        if key == ord('m'):  # Toggle posture detection mode
+            mode = "side" if mode == "front" else "front"
+            print("Switched to", mode)
+
+# Release webcam and close window
 cap.release()
 cv.destroyAllWindows()
+
             
 
 
