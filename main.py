@@ -56,6 +56,18 @@ with mp_pose.Pose(min_detection_confidence = 0.5,
             #called right_hip.
 
             #print the x,y,and z values of the shoulders and hips with a label. 
+
+            #f"text": formats your floating point value to 2 decimal using .2f (can change if wanted)
+            #(30, 30)(30, 50), etc: is the x and y coordinate of the text on the screen (can be changed)
+            #cv.FONT_HERSHEY_SIMPLEX is just a font
+            #0.5 is the font scale (can make this bigger or smaller)
+            #(0,255,0) green color (can be changed)
+            # 1 is the line thickness
+            cv.putText(image, f"Left Shoulder: {left_shoulder.x:.2f}, {left_shoulder.y:.2f}, {left_shoulder.z:.2f}",(30,30), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0),1)
+            cv.putText(image, f"Right Shoulder: {right_shoulder.x:.2f}, {right_shoulder.y:.2f}, {right_shoulder.z:2f}",(30,50), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0),1)
+            cv.putText(image, f"Left Hip: {left_hip.x:.2f}, {left_hip.y:.2f}, {left_hip.z:.2f}",(30,70), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0),1)
+            cv.putText(image, f"Right Hip: {right_hip.x:.2f}, {right_hip.y:.2f}, {right_hip.z:.2f}",(30,90), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0),1)
+
             print("Left shoulder:", left_shoulder.x, left_shoulder.y, left_shoulder.z)
             print("Right shoulder:", right_shoulder.x, right_shoulder.y, right_shoulder.z)
             print("Left hip:", left_hip.x, left_hip.y, left_hip.z)
