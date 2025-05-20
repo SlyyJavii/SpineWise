@@ -46,6 +46,37 @@ git push
   - `dev` is for combining features during the sprint
 
 ## Installing OpenCV on your local machine instructions
+### Instructions for Windows, assuming you already have Chocolatey, Python, and pip installed
+1. Create your virtual environment:
+```bash
+python -m venv opencv-env
+```
+2. Activate your virtual environment:
+- Command Prompt:
+```bash
+opencv-env\Scripts\activate
+```
+- Powershell:
+```bash
+opencv-env\Scripts\Activate.ps1
+```
+3. Install OpenCV using pip install
+```bash
+pip install opencv-python
+```
+- You can update to the latest version of pip with the command:
+```bash
+pip install --upgrade pip
+```
+4. Check if it was installed properly:
+```bash
+python
+```
+- Once inside the Python prompt (>>>), run:
+```bash
+import cv2
+print(cv2.__version__)
+```
 ### Instructions for MacBook, assuming you already have Homebrew, Python, and pip installed
 1. In terminal run:
 ```bash
@@ -70,6 +101,34 @@ pip3 install opencv-python
   ```
 ## Installing MediaPipe on your local machine instructions
 ### Python version must be in-between 3.7 - 3.11 to be able to use MediaPipe
+### Instructions for Windows, assuming you have an active Python environment, and you have created an OpenCV project in VSCode.
+1. Activate your virtual environment  
+- In Command Prompt:
+```bash
+opencv-env\Scripts\activate
+```
+ - In PowerShell:
+```bash
+.\opencv-env\Scripts\Activate.ps1
+```
+- If PowerShell gives an execution policy error, run:
+```bash
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+```
+2. Install MediaPipe
+```bash
+pip install mediapipe
+```
+3. Import mediapipe in your Python Script
+- In your .py file
+```bash
+import mediapipe as mp
+```
+4. Import the pose tracking model
+```bash
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose()
+```
 ### Instructions for MacBook, assuming you have an active Python environment, and you have created an OpenCV project in VSCode.
 1. Ensure that your virtual environment is activated
 ```bash
