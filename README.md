@@ -1,5 +1,5 @@
 # SpineWise
-A Desktop Application to Detect Bad Posture and Provide Curated e-commerce suggestions to minimize possible health complications. 
+**A Desktop Application to Detect Bad Posture and Provide Curated e-commerce suggestions to minimize possible health complications.**
 ## Features
 - Posture Detection
 - Alerting System
@@ -143,6 +143,37 @@ pip install mediapipe
 import mediapipe as mp
 ```
 4. Since we are going to be tracking the body, we should import the ``mp_pose.Pose()`` for body tracking
+## User Testers Instructions
+**Help us test our body detection system using your webcam**
+No code changes are needed - follow these steps:
+- Python 3.8+
+- A working webcam
+- Internet Connection
+1. Open your terminal and run: ``pip install opencv-python mediapipe''
+2. Clone this repository
+```bash
+git clone https://github.com/SlyJavii/SpineWise.git
+cd SpineWise
+git checkout dev
+python main.py
+```
+### How it Works ###
+- The app will activate the webcam and detect your posture
+- You will see visual feedback and posture labels in real-time.
+- Press M to switch between front and side posture.
+- Press C to calibrate your good posture.
+- Press ESC to exit.
+### Give us Feedback! ###
+After testing, let us know:
+- Was posture detection **accurate**?
+- Was it **easy-to-use**
+- Any **bugs, lags, or weird behavior**?
+You can submit feedback by:
+- Filling out our Feedback Form: [Submit Feedback Here](https://forms.gle/7ATEaCgwdEdAusYXA)
+
+
+
+
 
 
 
