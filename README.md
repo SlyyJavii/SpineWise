@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?font=Fira+Code&pause=1000&color=0FF3B7&width=435&lines=Welcome+to+SpineWise!;Posture+Detection+Made+Easy.;Real-time+Feedback+%F0%9F%91%89+Try+it+Now!" alt="Typing SVG" />
+</p>
+
 # SpineWise
 **A Desktop Application to Detect Bad Posture and Provide Curated e-commerce suggestions to minimize possible health complications.**
 ## Features
