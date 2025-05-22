@@ -21,10 +21,8 @@ def get_depth_from_midas(landmark, image_width, image_height, depth_map):
     y = int(landmark.y * image_height)
     if 0 <= x < depth_map.shape[1] and 0 <= y < depth_map.shape[0]:
         depth = depth_map[y, x]
-        print(f"[DEBUG] Mapped landmark ({landmark.x:.2f}, {landmark.y:.2f}) to pixel ({x},{y}) → depth={depth:.4f}")
         return float(depth)
     else:
-        print(f"[WARNING] Landmark ({landmark.x:.2f}, {landmark.y:.2f}) out of bounds at ({x},{y})")
         return None
 
 # Compute the angle in degrees between two 2D vectors
