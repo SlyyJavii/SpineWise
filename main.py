@@ -2,25 +2,33 @@ import cv2 as cv
 import time
 import mediapipe as mp
 import math
+import torch
+import numpy as np
+import threading
 
-# Initialize MediaPipe drawing and pose estimation modules
-mp_drawing = mp.solutions.drawing_utils
-mp_pose = mp.solutions.pose
+# Load MiDaS depth estimation model and its transformation pipeline
+midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+midas.to(device).eval()
+midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+transform = midas_transforms.small_transform
 
-# Calibration state and data containers
-is_calibrating = False
-calibration_data = {
-    "slouch_angles": [],
-    "z_diffs": [],
-    "nose_hip_z_diffs": [],
-    "eye_hip_z_diffs": [],
-    "spine_angles": [],
-    "sitting_heights": [],
-    "head_to_shoulder_heights": []  # New: Track head-to-shoulder height to detect downward head tilt  # New: Track head-to-hip height for slouch detection
-}
-calibrated_thresholds = {}
+# Given a landmark, convert its normalized coordinates to pixel space and retrieve the corresponding depth value
+# Returns None if the landmark is out of bounds
 
-# Helper function to calculate angle between two vectors
+def get_depth_from_midas(landmark, image_width, image_height, depth_map):
+    x = int(landmark.x * image_width)
+    y = int(landmark.y * image_height)
+    if 0 <= x < depth_map.shape[1] and 0 <= y < depth_map.shape[0]:
+        depth = depth_map[y, x]
+        print(f"[DEBUG] Mapped landmark ({landmark.x:.2f}, {landmark.y:.2f}) to pixel ({x},{y}) → depth={depth:.4f}")
+        return float(depth)
+    else:
+        print(f"[WARNING] Landmark ({landmark.x:.2f}, {landmark.y:.2f}) out of bounds at ({x},{y})")
+        return None
+
+# Compute the angle in degrees between two 2D vectors
+
 def calculate_angle(v1, v2):
     dot = v1[0]*v2[0] + v1[1]*v2[1]
     mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
@@ -28,50 +36,76 @@ def calculate_angle(v1, v2):
     angle_rad = math.acos(dot / (mag1 * mag2))
     return math.degrees(angle_rad)
 
-# Smoothing function to reduce jitter
+# Exponential smoothing function to reduce frame-to-frame jitter
+
 def smooth(prev, current, alpha=0.2):
     return (1 - alpha) * prev + alpha * current
 
-# Store manually editable shoulder points (None means use MediaPipe values)
-manual_left_shoulder = None
-manual_right_shoulder = None
-editing_shoulder = None  # Track which shoulder is being edited ("left" or "right")
+# Initialize MediaPipe pose and drawing utilities
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
 
-# Mouse callback function to allow clicking and dragging shoulder points
-def mouse_callback(event, x, y, flags, param):
-    global manual_left_shoulder, manual_right_shoulder, editing_shoulder
-
-    # If mouse is pressed down, check if it is near either shoulder
-    if event == cv.EVENT_LBUTTONDOWN:
-        # Distance from left shoulder
-        if manual_left_shoulder and abs(manual_left_shoulder[0] - x) < 20 and abs(manual_left_shoulder[1] - y) < 20:
-            editing_shoulder = "left"
-        elif manual_right_shoulder and abs(manual_right_shoulder[0] - x) < 20 and abs(manual_right_shoulder[1] - y) < 20:
-            editing_shoulder = "right"
-
-    # If mouse is being dragged, update the corresponding shoulder position
-    elif event == cv.EVENT_MOUSEMOVE and editing_shoulder:
-        if editing_shoulder == "left":
-            manual_left_shoulder = (x, y)
-        elif editing_shoulder == "right":
-            manual_right_shoulder = (x, y)
-
-    # If mouse is released, stop editing
-    elif event == cv.EVENT_LBUTTONUP:
-        editing_shoulder = None
-
-# Create video capture object for webcam
+# Open the webcam
 cap = cv.VideoCapture(0)
+cap.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
 
-# Set up mouse callback window to enable interactive shoulder alignment
-cv.namedWindow('Posture Detection')
-cv.setMouseCallback('Posture Detection', mouse_callback)
+# Parameter thresholds for posture classification
+# These can be customized to fit different user sensitivity levels
+POSTURE_PARAMS = {
+    'shoulder_tilt_threshold': 0.03,
+    'z_diff_forward_threshold': 0.05,
+    'head_to_shoulder_threshold': 0.08,
+    'spine_bad_angle': 30,
+    'spine_warn_angle': 20
+}
 
-with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as pose:
-    mode = "front"
+# Variables for posture calibration
+calibration_mode = False
+calibration_depth_diffs = []
+calibrated_depth_threshold = None
+calibration_start_time = None
+calibration_duration = 5
+countdown_duration = 3  # Seconds to count down before calibration
+hold_duration = 5       # Seconds to hold good posture
+
+# Track which posture view mode we are analyzing: front or side
+mode = "front"
+
+# Thread-safe variables for MiDaS
+cached_depth_map = None
+new_frame = None
+lock = threading.Lock()
+
+# Run MiDaS continuously in a background thread
+
+def run_midas():
+    global cached_depth_map, new_frame
+    while True:
+        if new_frame is not None:
+            with lock:
+                frame = new_frame.copy()
+                new_frame = None
+            resized = cv.resize(frame, (256, 256))
+            input_batch = transform(resized).to(device)
+            with torch.no_grad():
+                prediction = midas(input_batch)
+                prediction = torch.nn.functional.interpolate(
+                    prediction.unsqueeze(1),
+                    size=frame.shape[:2],
+                    mode="bicubic",
+                    align_corners=False
+                ).squeeze()
+            cached_depth_map = prediction.to("cpu").numpy()
+
+# Launch MiDaS in a daemon thread
+threading.Thread(target=run_midas, daemon=True).start()
+
+results = None
+with mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.7, min_tracking_confidence=0.7) as pose:
     prev_slouch_angle = 0
-    prev_z_diff_nose = 0
     prev_spine_angle = 0
+    prev_frame_time = 0
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -79,203 +113,173 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
             print("Ignoring empty frame")
             continue
 
-        posture_status = "No pose detected"
-        color = (128, 128, 128)
+        # Pass new frame to MiDaS
+        with lock:
+            if new_frame is None:
+                new_frame = frame.copy()
 
+        # Resize and prepare frame for MediaPipe
+        frame = cv.resize(frame, (640, 480))
         image = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
         image.flags.writeable = False
         results = pose.process(image)
         image.flags.writeable = True
         image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
 
-        # Check if landmarks were detected
-        if results.pose_landmarks and results.pose_world_landmarks:
-            # Use 2D landmarks (normalized coordinates)
+        # If MiDaS hasn't returned depth yet, wait
+        if cached_depth_map is None:
+            cv.putText(image, "Waiting for depth...", (30, 70),
+                       cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv.imshow("Posture Detection", image)
+            if cv.waitKey(5) & 0xFF == 27:
+                break
+            continue
+
+        depth_map = cached_depth_map
+
+        # Show live FPS
+        new_frame_time = time.time()
+        fps = 1 / (new_frame_time - prev_frame_time) if prev_frame_time > 0 else 0
+        prev_frame_time = new_frame_time
+        cv.putText(image, f"FPS: {int(fps)}", (30, 110),
+                   cv.FONT_HERSHEY_PLAIN, 1.4, (0, 255, 0), 1)
+
+        # Full posture logic restored
+        if results and results.pose_landmarks and results.pose_world_landmarks:
             landmarks = results.pose_landmarks.landmark
-            # Use world landmarks (3D coordinates in meters for more accurate depth and angle)
             world_landmarks = results.pose_world_landmarks.landmark
-            # Get shoulder positions from MediaPipe or use manually overridden ones
+            h, w, _ = image.shape
+
             left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
-            left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
             left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
-            right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
             right_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
             nose = landmarks[mp_pose.PoseLandmark.NOSE]
             left_eye = landmarks[mp_pose.PoseLandmark.LEFT_EYE]
             right_eye = landmarks[mp_pose.PoseLandmark.RIGHT_EYE]
 
-            mid_eye_z = (left_eye.z + right_eye.z) / 2
-            z_diff_head_nose = nose.z - left_hip.z
-            z_diff_head_eye = mid_eye_z - left_hip.z
+            depth_nose = get_depth_from_midas(nose, w, h, depth_map)
+            depth_hip = get_depth_from_midas(left_hip, w, h, depth_map)
 
-            adjusted_left_shoulder_y = (left_shoulder.y + left_ear.y) / 2
-            h, w, _ = image.shape  # ✅ Ensure w and h are defined BEFORE use
+            nose_depth_display = f"{depth_nose:.2f} mm" if depth_nose is not None else "N/A"
 
-            if manual_left_shoulder:
-                # Override with manually dragged position if set
-                adjusted_left_shoulder = [manual_left_shoulder[0] / w, manual_left_shoulder[1] / h]
+            if depth_nose is not None and depth_hip is not None:
+                z_diff_nose_hip = smooth(prev_slouch_angle, depth_nose - depth_hip)
+                prev_slouch_angle = z_diff_nose_hip
             else:
-                adjusted_left_shoulder = [left_shoulder.x, adjusted_left_shoulder_y]
+                z_diff_nose_hip = 0
 
-            torso_vector = [adjusted_left_shoulder[0] - left_hip.x,
-                            adjusted_left_shoulder[1] - left_hip.y]
-            vertical_vector = [0, -1]
-
-            slouch_angle = calculate_angle(torso_vector, vertical_vector)
-            z_diff = left_shoulder.z - left_hip.z
-            slouch_angle = smooth(prev_slouch_angle, slouch_angle)
-            z_diff_head_nose = smooth(prev_z_diff_nose, z_diff_head_nose)
-            prev_slouch_angle = slouch_angle
-            prev_z_diff_nose = z_diff_head_nose
-
-            mid_back = [(left_shoulder.x + right_hip.x) / 2,
-                        (left_shoulder.y + right_hip.y) / 2]
-            spine_vector = [mid_back[0] - left_hip.x, mid_back[1] - left_hip.y]
-            # Recalculate spine angle using real-world coordinates for accuracy
             world_left_shoulder = world_landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
             world_right_hip = world_landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
             world_left_hip = world_landmarks[mp_pose.PoseLandmark.LEFT_HIP]
 
-            # Create a mid-back point in 3D space between left shoulder and right hip
             mid_back_world = [
                 (world_left_shoulder.x + world_right_hip.x) / 2,
                 (world_left_shoulder.y + world_right_hip.y) / 2
             ]
-            spine_vector = [mid_back_world[0] - world_left_hip.x, mid_back_world[1] - world_left_hip.y]
+            spine_vector = [mid_back_world[0] - world_left_hip.x,
+                            mid_back_world[1] - world_left_hip.y]
+            vertical_vector = [0, -1]
             spine_angle = calculate_angle(spine_vector, vertical_vector)
             spine_angle = smooth(prev_spine_angle, spine_angle)
-            # Measure sitting height using distance from nose to midpoint between hips
-            mid_hip_y = (left_hip.y + right_hip.y) / 2
-            sitting_height = abs(nose.y - mid_hip_y)
-            head_to_shoulder_height = abs(nose.y - adjusted_left_shoulder_y)
             prev_spine_angle = spine_angle
 
-            # Get frame dimensions for scaling
-            h, w, _ = image.shape
+            shoulder_tilt = abs(landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y -
+                                landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y)
+            mid_eye_z = (left_eye.z + right_eye.z) / 2
+            head_to_shoulder_height = abs(nose.y - ((left_shoulder.y + landmarks[mp_pose.PoseLandmark.LEFT_EAR].y) / 2))
 
-            # If manual points exist, draw them visibly on screen
-            if manual_left_shoulder:
-                cv.circle(image, manual_left_shoulder, 8, (0, 255, 255), -1)
-            if manual_right_shoulder:
-                cv.circle(image, manual_right_shoulder, 8, (255, 255, 0), -1)
-            cv.line(
-                image,
-                (int(mid_back[0] * w), int(mid_back[1] * h)),
-                (int(left_hip.x * w), int(left_hip.y * h)),
-                (0, 255, 0), 2
-            )
+            posture_status = "Analyzing..."
+            color = (255, 255, 255)
 
-            if is_calibrating:
+            if calibration_mode:
                 elapsed = time.time() - calibration_start_time
                 if elapsed < countdown_duration:
                     remaining = int(countdown_duration - elapsed) + 1
-                    cv.putText(image, f"Starting in: {remaining}s", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    cv.putText(image, f"Starting in: {remaining}s", (30, 150),
+                               cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 elif elapsed < countdown_duration + hold_duration:
-                    calibration_data["slouch_angles"].append(slouch_angle)
-                    calibration_data["z_diffs"].append(z_diff)
-                    calibration_data["nose_hip_z_diffs"].append(z_diff_head_nose)
-                    calibration_data["eye_hip_z_diffs"].append(z_diff_head_eye)
-                    calibration_data["spine_angles"].append(spine_angle)
-                    calibration_data["sitting_heights"].append(sitting_height)
-                    calibration_data["head_to_shoulder_heights"].append(head_to_shoulder_height)
-                    cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    calibration_depth_diffs.append(z_diff_nose_hip)
+                    cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150),
+                               cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 else:
-                    is_calibrating = False
-                    cv.putText(image, "Calibration complete!", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    print("Calibration ended. Processing...")
-                    if len(calibration_data["slouch_angles"]) > 0:
-                        avg_angle = sum(calibration_data["slouch_angles"]) / len(calibration_data["slouch_angles"])
-                        avg_z_diff = sum(calibration_data["z_diffs"]) / len(calibration_data["z_diffs"])
-                        avg_nose = sum(calibration_data["nose_hip_z_diffs"]) / len(calibration_data["nose_hip_z_diffs"])
-                        avg_eye = sum(calibration_data["eye_hip_z_diffs"]) / len(calibration_data["eye_hip_z_diffs"])
-                        avg_spine = sum(calibration_data["spine_angles"]) / len(calibration_data["spine_angles"])
-                        avg_height = sum(calibration_data["sitting_heights"]) / len(calibration_data["sitting_heights"])
-                        avg_head_shoulder = sum(calibration_data["head_to_shoulder_heights"]) / len(calibration_data["head_to_shoulder_heights"])
+                    calibration_mode = False
+                    calibrated_depth_threshold = sum(calibration_depth_diffs) / len(calibration_depth_diffs)
+                    print(f"Calibration complete. Depth threshold set to: {calibrated_depth_threshold:.3f}")
+                    cv.putText(image, "Calibration Complete", (30, 150),
+                               cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-                        calibrated_thresholds = {
-                            "slouch_warn": avg_angle + 10,
-                            "slouch_bad": avg_angle + 20,
-                            "z_warn": avg_z_diff - 0.05,
-                            "z_bad": avg_z_diff - 0.15,
-                            "nose_warn": avg_nose - 0.1,
-                            "nose_bad": avg_nose - 0.25,
-                            "eye_warn": avg_eye - 0.1,
-                            "eye_bad": avg_eye - 0.25,
-                            "spine_bad": avg_spine + 15,
-                            "height_drop_threshold": avg_height - 0.02,
-                            "head_shoulder_drop_threshold": avg_head_shoulder - 0.015
-                        }
-                        print("Calibration complete.")
-                        print("Thresholds:", calibrated_thresholds)
+            elif calibrated_depth_threshold is not None:
+                if mode == "front":
+                    if shoulder_tilt > POSTURE_PARAMS['shoulder_tilt_threshold']:
+                        posture_status = "Shoulder Tilt Detected"
+                        color = (0, 0, 255)
+                    elif z_diff_nose_hip < calibrated_depth_threshold - POSTURE_PARAMS['z_diff_forward_threshold']:
+                        posture_status = "Leaning Forward"
+                        color = (0, 0, 255)
+                    elif head_to_shoulder_height < POSTURE_PARAMS['head_to_shoulder_threshold']:
+                        posture_status = "Head Tilt Detected"
+                        color = (0, 0, 255)
+                    else:
+                        posture_status = "Good Front Posture"
+                        color = (0, 255, 0)
+                elif mode == "side":
+                    if spine_angle > POSTURE_PARAMS['spine_bad_angle']:
+                        posture_status = "Hunched Spine"
+                        color = (0, 0, 255)
+                    elif spine_angle > POSTURE_PARAMS['spine_warn_angle']:
+                        posture_status = "Moderate Curve"
+                        color = (0, 165, 255)
+                    else:
+                        posture_status = "Good Side Posture"
+                        color = (0, 255, 0)
 
-            if calibrated_thresholds and mode == "front":
-                shoulder_tilt = abs(left_shoulder.y - right_shoulder.y)
-                # Diagnostic messages for specific posture deviations
-                if shoulder_tilt > 0.03:
-                    posture_status = "Shoulder Tilt / Crunch Detected"
-                    color = (0, 0, 255)
-                elif head_to_shoulder_height < calibrated_thresholds["head_shoulder_drop_threshold"]:
-                    posture_status = "Head Tilt Detected"
-                    color = (0, 0, 255)
-                elif sitting_height < calibrated_thresholds["height_drop_threshold"]:
-                    posture_status = "Overall Height Decrease (Possible Slouch)"
-                    color = (0, 0, 255)
-                elif slouch_angle > calibrated_thresholds["slouch_bad"] or \
-                     z_diff < calibrated_thresholds["z_bad"] or \
-                     z_diff_head_nose < calibrated_thresholds["nose_bad"]:
-                    posture_status = "Slouching!"
-                    color = (0, 0, 255)
-                elif (calibrated_thresholds["slouch_warn"] < slouch_angle <= calibrated_thresholds["slouch_bad"]) or \
-                     (calibrated_thresholds["z_warn"] > z_diff >= calibrated_thresholds["z_bad"]) or \
-                     (calibrated_thresholds["nose_warn"] > z_diff_head_nose >= calibrated_thresholds["nose_bad"]) or \
-                     (0.015 < shoulder_tilt <= 0.03) or \
-                     (calibrated_thresholds["height_drop_threshold"] < sitting_height <= calibrated_thresholds["height_drop_threshold"] + 0.015) or \
-                     (calibrated_thresholds["head_shoulder_drop_threshold"] < head_to_shoulder_height <= calibrated_thresholds["head_shoulder_drop_threshold"] + 0.01):
-                    posture_status = "Moderate Slouch"
-                    color = (0, 165, 255)
-                else:
-                    posture_status = "Great Posture!"
-                    color = (0, 255, 0)
-
-            elif calibrated_thresholds and mode == "side":
-                # STRAIGHTNESS AND FORWARD TILT CHECK: Detect spinal curve and shoulder tilt
-                if spine_angle > calibrated_thresholds.get("spine_bad", 30) - 10 or slouch_angle > 15:
-                    posture_status = "Hunched Spine or Forward Tilt"
-                    color = (0, 0, 255)
-                elif spine_angle > calibrated_thresholds.get("spine_bad", 30) - 15 or slouch_angle > 10:
-                    posture_status = "Moderate Curve or Lean"
-                    color = (0, 165, 255)
-                else:
-                    posture_status = "Good Side Posture"
-                    color = (0, 255, 0)
+                cv.putText(image, posture_status, (30, 90),
+                           cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
             mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-            cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv.putText(image, posture_status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-            # Display live spine angle on screen for visual feedback
-            cv.putText(image, f"Spine Angle: {round(spine_angle, 1)} deg", (30, 120), cv.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 255), 2)
 
-        cv.imshow('Posture Detection', image)
+            # ➕ Draw neck-to-shoulder and shoulder-to-hip angles visually like RTMPose/monitoring tools
+            ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
+            shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
+            hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
 
+            # Vectors
+            vec_neck = [ear.x - shoulder.x, ear.y - shoulder.y]
+            vec_torso = [hip.x - shoulder.x, hip.y - shoulder.y]
+            neck_angle = calculate_angle(vec_neck, vec_torso)
+
+            # Draw lines
+            cv.line(image, (int(ear.x * w), int(ear.y * h)), (int(shoulder.x * w), int(shoulder.y * h)), (0, 0, 255), 2)
+            cv.line(image, (int(hip.x * w), int(hip.y * h)), (int(shoulder.x * w), int(shoulder.y * h)), (0, 0, 255), 2)
+            # Draw angle text
+            cv.putText(image, f"{int(neck_angle)}°", (int(shoulder.x * w), int(shoulder.y * h) - 10),
+                       cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv.putText(image, f"Mode: {mode}", (30, 20),
+                       cv.FONT_HERSHEY_PLAIN, 1.4, (255, 255, 255), 2)
+            cv.putText(image, f"Spine Angle: {round(spine_angle, 1)}", (30, 50),
+                       cv.FONT_HERSHEY_PLAIN, 1.4, (255, 255, 255), 2)
+            cv.putText(image, f"Nose-Hip Δ: {z_diff_nose_hip:.2f}", (30, 70),
+                       cv.FONT_HERSHEY_PLAIN, 1.4, (255, 255, 255), 2)
+            cv.putText(image, f"Nose Depth: {nose_depth_display}", (30, 140),
+                       cv.FONT_HERSHEY_PLAIN, 1.4, (0, 255, 255), 2)
+
+        # Show the frame
+        cv.imshow("Posture Detection", image)
+
+        # Key press handling: ESC to quit, 'c' to calibrate, 'm' to toggle mode
         key = cv.waitKey(5) & 0xFF
         if key == 27:
             break
+        elif key == ord('c'):
+            calibration_mode = True
+            calibration_depth_diffs.clear()
+            calibration_start_time = time.time()
+            print("Calibration started. Hold good posture.")
         elif key == ord('m'):
             mode = "side" if mode == "front" else "front"
-            print("Switched to", mode)
-        elif key == ord('c'):
-            calibration_start_time = time.time()
-            countdown_duration = 3
-            hold_duration = 5
-            is_calibrating = True
-            calibration_data = {k: [] for k in calibration_data}
-            print("Calibration countdown started. Get ready...")
+            print(f"Switched to {mode} mode")
 
+# Release webcam and close window
 cap.release()
 cv.destroyAllWindows()
-
-
-
-
 
