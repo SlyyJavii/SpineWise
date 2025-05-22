@@ -2,6 +2,66 @@ import cv2 as cv
 import time
 import mediapipe as mp
 import math
+import speech_recognition as sr
+import threading
+
+# Initialize MediaPipe drawing and pose estimation modules
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
+
+# Calibration state and data containers
+is_calibrating = False
+countdown_duration = 3
+hold_duration = 5
+calibration_start_time = 0
+mode = "front"
+calibration_data = {
+    "slouch_angles": [],
+    "z_diffs": [],
+    "nose_hip_z_diffs": [],
+    "eye_hip_z_diffs": [],
+    "spine_angles": [],
+    "sitting_heights": [],
+    "head_to_shoulder_heights": []
+}
+calibrated_thresholds = {}
+
+# Start speech recognition listener
+def listen_for_speech():
+    global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
+    recognizer = sr.Recognizer()
+    mic = sr.Microphone()
+    with mic as source:
+        recognizer.adjust_for_ambient_noise(source)
+        print("[SpeechRecognition] Listening...")
+        while True:
+            try:
+                audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                command = recognizer.recognize_google(audio).lower().strip()
+                print(f"[SpeechRecognition] Heard: {command}")
+                if "calibrate" in command:
+                    calibration_start_time = time.time()
+                    is_calibrating = True
+                    calibration_data = {k: [] for k in calibration_data}
+                    print("Calibration countdown started. Get ready...")
+                elif "switch" in command:
+                    mode = "side" if mode == "front" else "front"
+                    print("Switched to", mode)
+            except sr.WaitTimeoutError:
+                continue
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError:
+                print("[SpeechRecognition] API unavailable")
+                break
+
+threading.Thread(target=listen_for_speech, daemon=True).start()
+
+# (rest of your code remains unchanged below)
+import cv2 as cv
+import time
+import mediapipe as mp
+import math
 
 # Initialize MediaPipe drawing and pose estimation modules
 mp_drawing = mp.solutions.drawing_utils
