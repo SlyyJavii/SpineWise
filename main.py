@@ -104,6 +104,12 @@ with mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.7, min_tra
     prev_slouch_angle = 0
     prev_spine_angle = 0
     prev_frame_time = 0
+    #posturing filtering setup
+    last_detected_status = "Analyzing..."
+    confirmed_status = "Analyzing..."
+    status_change_time = None
+    STABLE_DURATION = 1.0 #seconds to confirm change
+    pending_status = None
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -209,29 +215,40 @@ with mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.7, min_tra
             elif calibrated_depth_threshold is not None:
                 if mode == "front":
                     if shoulder_tilt > POSTURE_PARAMS['shoulder_tilt_threshold']:
-                        posture_status = "Shoulder Tilt Detected"
-                        color = (0, 0, 255)
+                        detected_status = "Shoulder Tilt Detected"
                     elif z_diff_nose_hip < calibrated_depth_threshold - POSTURE_PARAMS['z_diff_forward_threshold']:
-                        posture_status = "Leaning Forward"
-                        color = (0, 0, 255)
+                        detected_status = "Leaning Forward"
                     elif head_to_shoulder_height < POSTURE_PARAMS['head_to_shoulder_threshold']:
-                        posture_status = "Head Tilt Detected"
-                        color = (0, 0, 255)
+                        detected_status = "Head Tilt Detected"
                     else:
-                        posture_status = "Good Front Posture"
-                        color = (0, 255, 0)
+                        detected_status = "Good Front Posture"
                 elif mode == "side":
                     if spine_angle > POSTURE_PARAMS['spine_bad_angle']:
-                        posture_status = "Hunched Spine"
-                        color = (0, 0, 255)
+                        detected_status = "Hunched Spine"
                     elif spine_angle > POSTURE_PARAMS['spine_warn_angle']:
-                        posture_status = "Moderate Curve"
-                        color = (0, 165, 255)
+                        detected_status = "Moderate Curve"
                     else:
-                        posture_status = "Good Side Posture"
-                        color = (0, 255, 0)
+                        detected_status = "Good Side Posture"
+                
+                current_time = time.time()
+                if detected_status != last_detected_status:
+                    if detected_status != pending_status:
+                        pending_status = detected_status
+                        status_change_time = current_time
+                    elif current_time - status_change_time > STABLE_DURATION:
+                        confirmed_status = detected_status
+                else:
+                    pending_status = None
+                    status_change_time = None
+                
+                if "Good" in confirmed_status:
+                    color = (0,255,0)
+                elif "Moderate" in confirmed_status:
+                    color = (0, 165, 255)
+                else:
+                    color = (0, 0, 255)
 
-                cv.putText(image, posture_status, (30, 90),
+                cv.putText(image, confirmed_status, (30, 90),
                            cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
             mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
