@@ -22,6 +22,9 @@ calibration_data = {
     "sitting_heights": [],
     "head_to_shoulder_heights": []  # New: Track head-to-shoulder height to detect downward head tilt  # New: Track head-to-hip height for slouch detection
 }
+countdown_duration = 3  # seconds before calibration begins
+hold_duration = 5       # seconds to hold posture during calibration
+
 calibrated_thresholds = {}
 # Start speech recognition listener
 def listen_for_speech():
