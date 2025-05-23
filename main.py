@@ -6,6 +6,7 @@ import mediapipe as mp
 import math
 import speech_recognition as sr
 import threading
+import numpy as np
 
 last_log_time = time.time()
 log_file = open("posture_trend_log.csv", mode='w', newline='')
@@ -27,7 +28,8 @@ calibration_data = {
     "spine_angles": [],
     "sitting_heights": [],
     "head_to_shoulder_heights": [],
-    "shoulder_mouth_distances": []
+    "shoulder_mouth_distances": [],
+    "clavicle_lengths": []
 }
 countdown_duration = 3
 hold_duration = 5
@@ -180,6 +182,8 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
             sitting_height = abs(nose.y - mid_hip_y)
             head_to_shoulder_height = abs(nose.y - adjusted_left_shoulder_y)
 
+            clavicle_length = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
+
             if is_calibrating:
                 elapsed = time.time() - calibration_start_time
                 if elapsed < countdown_duration:
@@ -197,6 +201,7 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                     calibration_data["spine_angles"].append(spine_angle)
                     calibration_data["sitting_heights"].append(sitting_height)
                     calibration_data["head_to_shoulder_heights"].append(head_to_shoulder_height)
+                    calibration_data["clavicle_lengths"].append(clavicle_length)
                     left_shoulder_mouth_dist = abs(left_shoulder.y - mouth.y)
                     right_shoulder_mouth_dist = abs(right_shoulder.y - mouth.y)
                     avg_shoulder_mouth_dist = (left_shoulder_mouth_dist + right_shoulder_mouth_dist) / 2
@@ -221,7 +226,8 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                         "height_drop_threshold": avg("sitting_heights") - 0.02,
                         "head_shoulder_drop_threshold": avg("head_to_shoulder_heights") - 0.015,
                         "shoulder_mouth_warn": avg("shoulder_mouth_distances") - 0.015,
-                        "shoulder_z_lean_threshold": avg("shoulder_z_depths") - 0.05
+                        "shoulder_z_lean_threshold": avg("shoulder_z_depths") - 0.05,
+                        "clavicle_length_threshold": avg("clavicle_lengths") * 0.6,
 
 
                         
@@ -234,6 +240,7 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                     z_diff_nose_hip = nose_z - hip_z
 
             if calibrated_thresholds:
+                mode = "side" if clavicle_length < calibrated_thresholds["clavicle_length_threshold"] else "front"
                 if mode == "front":
 
 
@@ -392,10 +399,12 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
 
                 if time.time() - last_log_time >= 10:
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    if mode == "front":
+                        facing = "front"
                     csv_writer.writerow([
                                             timestamp,
                                             mode,
-                                            facing if mode == "side" else "front",
+                                            facing,
                                             current_status,
                                             head_tilt_status if head_tilt_status else "neutral",
                                             confidence_score
@@ -422,9 +431,7 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
         cv.imshow('Posture Detection', image)
         key = cv.waitKey(5) & 0xFF
         if key == 27:
-            break
-        elif key == ord('m'):
-            mode = "side" if mode == "front" else "front"
+            breakW
         elif key == ord('c'):
             calibration_start_time = time.time()
             is_calibrating = True
