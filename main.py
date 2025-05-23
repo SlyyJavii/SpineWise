@@ -31,54 +31,60 @@ def listen_for_speech():
     global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
     recognizer = sr.Recognizer()
     mic = sr.Microphone()
-    with mic as source:
-        recognizer.adjust_for_ambient_noise(source)
-        print("[SpeechRecognition] Listening...")
-        while True:
-            try:
-                audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
-                command = recognizer.recognize_google(audio).lower().strip()
-                print(f"[SpeechRecognition] Heard: {command}")
-                if "calibrate" in command:
-                    calibration_start_time = time.time()
-                    is_calibrating = True
-                    calibration_data = {k: [] for k in calibration_data}
-                    print("Calibration countdown started. Get ready...")
-                elif "switch" in command:
-                    mode = "side" if mode == "front" else "front"
-                    print("Switched to", mode)
-            except sr.WaitTimeoutError:
-                continue
-            except sr.UnknownValueError:
-                continue
-            except sr.RequestError:
-                print("[SpeechRecognition] API unavailable")
-                break
+    try:
+        with mic as source:
+            recognizer.adjust_for_ambient_noise(source)
+            print("[SpeechRecognition] Listening...")
+            while True:
+                try:
+                    print("[DEBUG] Waiting for audio...")
+                    audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                    print("[DEBUG] Audio captured")
+                    command = recognizer.recognize_google(audio).lower().strip()
+                    print(f"[SpeechRecognition] Heard: {command}")
+                    if "calibrate" in command:
+                        calibration_start_time = time.time()
+                        is_calibrating = True
+                        calibration_data = {k: [] for k in calibration_data}
+                        print("Calibration countdown started. Get ready...")
+                    elif "switch" in command:
+                        mode = "side" if mode == "front" else "front"
+                        print("Switched to", mode)
+                except sr.WaitTimeoutError:
+                    continue
+                except sr.UnknownValueError:
+                    continue
+                except sr.RequestError:
+                    print("[SpeechRecognition] API unavailable")
+                    break
+    except Exception as e:
+        print("[ERROR] Microphone failed:", e)
 
+print("[Thread] Starting voice command thread...")
 threading.Thread(target=listen_for_speech, daemon=True).start()
 
-# (rest of your code remains unchanged below)
-import cv2 as cv
-import time
-import mediapipe as mp
-import math
+# The rest of the posture detection logic continues below...
 
-# Initialize MediaPipe drawing and pose estimation modules
-mp_drawing = mp.solutions.drawing_utils
-mp_pose = mp.solutions.pose
+# Store manually editable shoulder points (None means use MediaPipe values)
+manual_left_shoulder = None
+manual_right_shoulder = None
+editing_shoulder = None  # Track which shoulder is being edited ("left" or "right")
 
-# Calibration state and data containers
-is_calibrating = False
-calibration_data = {
-    "slouch_angles": [],
-    "z_diffs": [],
-    "nose_hip_z_diffs": [],
-    "eye_hip_z_diffs": [],
-    "spine_angles": [],
-    "sitting_heights": [],
-    "head_to_shoulder_heights": []  # New: Track head-to-shoulder height to detect downward head tilt  # New: Track head-to-hip height for slouch detection
-}
-calibrated_thresholds = {}
+# Mouse callback function to allow clicking and dragging shoulder points
+def mouse_callback(event, x, y, flags, param):
+    global manual_left_shoulder, manual_right_shoulder, editing_shoulder
+    if event == cv.EVENT_LBUTTONDOWN:
+        if manual_left_shoulder and abs(manual_left_shoulder[0] - x) < 20 and abs(manual_left_shoulder[1] - y) < 20:
+            editing_shoulder = "left"
+        elif manual_right_shoulder and abs(manual_right_shoulder[0] - x) < 20 and abs(manual_right_shoulder[1] - y) < 20:
+            editing_shoulder = "right"
+    elif event == cv.EVENT_MOUSEMOVE and editing_shoulder:
+        if editing_shoulder == "left":
+            manual_left_shoulder = (x, y)
+        elif editing_shoulder == "right":
+            manual_right_shoulder = (x, y)
+    elif event == cv.EVENT_LBUTTONUP:
+        editing_shoulder = None
 
 # Helper function to calculate angle between two vectors
 def calculate_angle(v1, v2):
@@ -91,34 +97,6 @@ def calculate_angle(v1, v2):
 # Smoothing function to reduce jitter
 def smooth(prev, current, alpha=0.2):
     return (1 - alpha) * prev + alpha * current
-
-# Store manually editable shoulder points (None means use MediaPipe values)
-manual_left_shoulder = None
-manual_right_shoulder = None
-editing_shoulder = None  # Track which shoulder is being edited ("left" or "right")
-
-# Mouse callback function to allow clicking and dragging shoulder points
-def mouse_callback(event, x, y, flags, param):
-    global manual_left_shoulder, manual_right_shoulder, editing_shoulder
-
-    # If mouse is pressed down, check if it is near either shoulder
-    if event == cv.EVENT_LBUTTONDOWN:
-        # Distance from left shoulder
-        if manual_left_shoulder and abs(manual_left_shoulder[0] - x) < 20 and abs(manual_left_shoulder[1] - y) < 20:
-            editing_shoulder = "left"
-        elif manual_right_shoulder and abs(manual_right_shoulder[0] - x) < 20 and abs(manual_right_shoulder[1] - y) < 20:
-            editing_shoulder = "right"
-
-    # If mouse is being dragged, update the corresponding shoulder position
-    elif event == cv.EVENT_MOUSEMOVE and editing_shoulder:
-        if editing_shoulder == "left":
-            manual_left_shoulder = (x, y)
-        elif editing_shoulder == "right":
-            manual_right_shoulder = (x, y)
-
-    # If mouse is released, stop editing
-    elif event == cv.EVENT_LBUTTONUP:
-        editing_shoulder = None
 
 # Create video capture object for webcam
 cap = cv.VideoCapture(0)
@@ -139,22 +117,16 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
             print("Ignoring empty frame")
             continue
 
-        posture_status = "No pose detected"
-        color = (128, 128, 128)
-
         image = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
         image.flags.writeable = False
         results = pose.process(image)
         image.flags.writeable = True
         image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
 
-        # Check if landmarks were detected
         if results.pose_landmarks and results.pose_world_landmarks:
-            # Use 2D landmarks (normalized coordinates)
             landmarks = results.pose_landmarks.landmark
-            # Use world landmarks (3D coordinates in meters for more accurate depth and angle)
             world_landmarks = results.pose_world_landmarks.landmark
-            # Get shoulder positions from MediaPipe or use manually overridden ones
+
             left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
             left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
             left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
@@ -169,10 +141,9 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
             z_diff_head_eye = mid_eye_z - left_hip.z
 
             adjusted_left_shoulder_y = (left_shoulder.y + left_ear.y) / 2
-            h, w, _ = image.shape  # ✅ Ensure w and h are defined BEFORE use
+            h, w, _ = image.shape
 
             if manual_left_shoulder:
-                # Override with manually dragged position if set
                 adjusted_left_shoulder = [manual_left_shoulder[0] / w, manual_left_shoulder[1] / h]
             else:
                 adjusted_left_shoulder = [left_shoulder.x, adjusted_left_shoulder_y]
@@ -190,131 +161,25 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
 
             mid_back = [(left_shoulder.x + right_hip.x) / 2,
                         (left_shoulder.y + right_hip.y) / 2]
-            spine_vector = [mid_back[0] - left_hip.x, mid_back[1] - left_hip.y]
-            # Recalculate spine angle using real-world coordinates for accuracy
+
             world_left_shoulder = world_landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
             world_right_hip = world_landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
             world_left_hip = world_landmarks[mp_pose.PoseLandmark.LEFT_HIP]
 
-            # Create a mid-back point in 3D space between left shoulder and right hip
             mid_back_world = [
                 (world_left_shoulder.x + world_right_hip.x) / 2,
                 (world_left_shoulder.y + world_right_hip.y) / 2
             ]
+
             spine_vector = [mid_back_world[0] - world_left_hip.x, mid_back_world[1] - world_left_hip.y]
             spine_angle = calculate_angle(spine_vector, vertical_vector)
             spine_angle = smooth(prev_spine_angle, spine_angle)
-            # Measure sitting height using distance from nose to midpoint between hips
-            mid_hip_y = (left_hip.y + right_hip.y) / 2
-            sitting_height = abs(nose.y - mid_hip_y)
-            head_to_shoulder_height = abs(nose.y - adjusted_left_shoulder_y)
             prev_spine_angle = spine_angle
-
-            # Get frame dimensions for scaling
-            h, w, _ = image.shape
-
-            # If manual points exist, draw them visibly on screen
-            if manual_left_shoulder:
-                cv.circle(image, manual_left_shoulder, 8, (0, 255, 255), -1)
-            if manual_right_shoulder:
-                cv.circle(image, manual_right_shoulder, 8, (255, 255, 0), -1)
-            cv.line(
-                image,
-                (int(mid_back[0] * w), int(mid_back[1] * h)),
-                (int(left_hip.x * w), int(left_hip.y * h)),
-                (0, 255, 0), 2
-            )
-
-            if is_calibrating:
-                elapsed = time.time() - calibration_start_time
-                if elapsed < countdown_duration:
-                    remaining = int(countdown_duration - elapsed) + 1
-                    cv.putText(image, f"Starting in: {remaining}s", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                elif elapsed < countdown_duration + hold_duration:
-                    calibration_data["slouch_angles"].append(slouch_angle)
-                    calibration_data["z_diffs"].append(z_diff)
-                    calibration_data["nose_hip_z_diffs"].append(z_diff_head_nose)
-                    calibration_data["eye_hip_z_diffs"].append(z_diff_head_eye)
-                    calibration_data["spine_angles"].append(spine_angle)
-                    calibration_data["sitting_heights"].append(sitting_height)
-                    calibration_data["head_to_shoulder_heights"].append(head_to_shoulder_height)
-                    cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                else:
-                    is_calibrating = False
-                    cv.putText(image, "Calibration complete!", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    print("Calibration ended. Processing...")
-                    if len(calibration_data["slouch_angles"]) > 0:
-                        avg_angle = sum(calibration_data["slouch_angles"]) / len(calibration_data["slouch_angles"])
-                        avg_z_diff = sum(calibration_data["z_diffs"]) / len(calibration_data["z_diffs"])
-                        avg_nose = sum(calibration_data["nose_hip_z_diffs"]) / len(calibration_data["nose_hip_z_diffs"])
-                        avg_eye = sum(calibration_data["eye_hip_z_diffs"]) / len(calibration_data["eye_hip_z_diffs"])
-                        avg_spine = sum(calibration_data["spine_angles"]) / len(calibration_data["spine_angles"])
-                        avg_height = sum(calibration_data["sitting_heights"]) / len(calibration_data["sitting_heights"])
-                        avg_head_shoulder = sum(calibration_data["head_to_shoulder_heights"]) / len(calibration_data["head_to_shoulder_heights"])
-
-                        calibrated_thresholds = {
-                            "slouch_warn": avg_angle + 10,
-                            "slouch_bad": avg_angle + 20,
-                            "z_warn": avg_z_diff - 0.05,
-                            "z_bad": avg_z_diff - 0.15,
-                            "nose_warn": avg_nose - 0.1,
-                            "nose_bad": avg_nose - 0.25,
-                            "eye_warn": avg_eye - 0.1,
-                            "eye_bad": avg_eye - 0.25,
-                            "spine_bad": avg_spine + 15,
-                            "height_drop_threshold": avg_height - 0.02,
-                            "head_shoulder_drop_threshold": avg_head_shoulder - 0.015
-                        }
-                        print("Calibration complete.")
-                        print("Thresholds:", calibrated_thresholds)
-
-            if calibrated_thresholds and mode == "front":
-                shoulder_tilt = abs(left_shoulder.y - right_shoulder.y)
-                # Diagnostic messages for specific posture deviations
-                if shoulder_tilt > 0.03:
-                    posture_status = "Shoulder Tilt / Crunch Detected"
-                    color = (0, 0, 255)
-                elif head_to_shoulder_height < calibrated_thresholds["head_shoulder_drop_threshold"]:
-                    posture_status = "Head Tilt Detected"
-                    color = (0, 0, 255)
-                elif sitting_height < calibrated_thresholds["height_drop_threshold"]:
-                    posture_status = "Overall Height Decrease (Possible Slouch)"
-                    color = (0, 0, 255)
-                elif slouch_angle > calibrated_thresholds["slouch_bad"] or \
-                     z_diff < calibrated_thresholds["z_bad"] or \
-                     z_diff_head_nose < calibrated_thresholds["nose_bad"]:
-                    posture_status = "Slouching!"
-                    color = (0, 0, 255)
-                elif (calibrated_thresholds["slouch_warn"] < slouch_angle <= calibrated_thresholds["slouch_bad"]) or \
-                     (calibrated_thresholds["z_warn"] > z_diff >= calibrated_thresholds["z_bad"]) or \
-                     (calibrated_thresholds["nose_warn"] > z_diff_head_nose >= calibrated_thresholds["nose_bad"]) or \
-                     (0.015 < shoulder_tilt <= 0.03) or \
-                     (calibrated_thresholds["height_drop_threshold"] < sitting_height <= calibrated_thresholds["height_drop_threshold"] + 0.015) or \
-                     (calibrated_thresholds["head_shoulder_drop_threshold"] < head_to_shoulder_height <= calibrated_thresholds["head_shoulder_drop_threshold"] + 0.01):
-                    posture_status = "Moderate Slouch"
-                    color = (0, 165, 255)
-                else:
-                    posture_status = "Great Posture!"
-                    color = (0, 255, 0)
-
-            elif calibrated_thresholds and mode == "side":
-                # STRAIGHTNESS AND FORWARD TILT CHECK: Detect spinal curve and shoulder tilt
-                if spine_angle > calibrated_thresholds.get("spine_bad", 30) - 10 or slouch_angle > 15:
-                    posture_status = "Hunched Spine or Forward Tilt"
-                    color = (0, 0, 255)
-                elif spine_angle > calibrated_thresholds.get("spine_bad", 30) - 15 or slouch_angle > 10:
-                    posture_status = "Moderate Curve or Lean"
-                    color = (0, 165, 255)
-                else:
-                    posture_status = "Good Side Posture"
-                    color = (0, 255, 0)
 
             mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv.putText(image, posture_status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-            # Display live spine angle on screen for visual feedback
-            cv.putText(image, f"Spine Angle: {round(spine_angle, 1)} deg", (30, 120), cv.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 255), 2)
+            cv.putText(image, f"Spine Angle: {round(spine_angle, 1)} deg", (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 255), 2)
 
         cv.imshow('Posture Detection', image)
 
@@ -334,8 +199,5 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
 
 cap.release()
 cv.destroyAllWindows()
-
-
-
 
 
