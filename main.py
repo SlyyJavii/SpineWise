@@ -1,11 +1,13 @@
+from colorsys import hsv_to_rgb
+
 import cv2 as cv
 import time
 import mediapipe as mp
 import math
+
+import numpy as np
 import speech_recognition as sr
 import threading
-
-
 
 # Initialize MediaPipe drawing and pose estimation modules
 mp_drawing = mp.solutions.drawing_utils
@@ -13,16 +15,13 @@ mp_pose = mp.solutions.pose
 
 # Calibration state and data containers
 is_calibrating = False
-calibration_data = {
-    "slouch_angles": [],
-    "z_diffs": [],
-    "nose_hip_z_diffs": [],
-    "eye_hip_z_diffs": [],
-    "spine_angles": [],
-    "sitting_heights": [],
-    "head_to_shoulder_heights": []  # New: Track head-to-shoulder height to detect downward head tilt  # New: Track head-to-hip height for slouch detection
-}
-calibrated_thresholds = {}
+countdown_duration = 3
+hold_duration = 5
+calibration_start_time = 0
+calibration_targets = {"slouch_angles", "z_diffs", "spine_angles", "sitting_heights", "head_to_shoulder_heights", "clavicle_lengths"}
+calibration_data = {k: [] for k in calibration_targets}
+calibrated_avgs = {}
+
 # Start speech recognition listener
 def listen_for_speech():
     global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
@@ -61,6 +60,9 @@ def listen_for_speech():
 print("[Thread] Starting voice command thread...")
 threading.Thread(target=listen_for_speech, daemon=True).start()
 
+# Initialize MediaPipe drawing and pose estimation modules
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
 
 # Helper function to calculate angle between two vectors
 def calculate_angle(v1, v2):
@@ -82,6 +84,8 @@ def normalize_lighting(frame):
     merged = cv.merge((cl, a, b))
     return cv.cvtColor(merged, cv.COLOR_LAB2BGR)
 
+def percent_change(a, b):
+    return 100 * (a-b) / b
 
 # Store manually editable shoulder points (None means use MediaPipe values)
 manual_left_shoulder = None
@@ -180,6 +184,8 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
             prev_slouch_angle = slouch_angle
             prev_z_diff_nose = z_diff_head_nose
 
+            clavicle_length = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
+
             mid_back = [(left_shoulder.x + right_hip.x) / 2,
                         (left_shoulder.y + right_hip.y) / 2]
             spine_vector = [mid_back[0] - left_hip.x, mid_back[1] - left_hip.y]
@@ -218,88 +224,66 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
             )
 
             if is_calibrating:
+                names = locals()
                 elapsed = time.time() - calibration_start_time
                 if elapsed < countdown_duration:
                     remaining = int(countdown_duration - elapsed) + 1
                     cv.putText(image, f"Starting in: {remaining}s", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 elif elapsed < countdown_duration + hold_duration:
-                    calibration_data["slouch_angles"].append(slouch_angle)
-                    calibration_data["z_diffs"].append(z_diff)
-                    calibration_data["nose_hip_z_diffs"].append(z_diff_head_nose)
-                    calibration_data["eye_hip_z_diffs"].append(z_diff_head_eye)
-                    calibration_data["spine_angles"].append(spine_angle)
-                    calibration_data["sitting_heights"].append(sitting_height)
-                    calibration_data["head_to_shoulder_heights"].append(head_to_shoulder_height)
+
+                    for k in calibration_targets:
+                        if k[:-1] in names:
+                            calibration_data[k].append(names[k[:-1]])
+                        else:
+                            print(f"Calibration target {k[:-1]} not found in environment. Could not calibrate")
                     cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 else:
                     is_calibrating = False
                     cv.putText(image, "Calibration complete!", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     print("Calibration ended. Processing...")
                     if len(calibration_data["slouch_angles"]) > 0:
-                        avg_angle = sum(calibration_data["slouch_angles"]) / len(calibration_data["slouch_angles"])
-                        avg_z_diff = sum(calibration_data["z_diffs"]) / len(calibration_data["z_diffs"])
-                        avg_nose = sum(calibration_data["nose_hip_z_diffs"]) / len(calibration_data["nose_hip_z_diffs"])
-                        avg_eye = sum(calibration_data["eye_hip_z_diffs"]) / len(calibration_data["eye_hip_z_diffs"])
-                        avg_spine = sum(calibration_data["spine_angles"]) / len(calibration_data["spine_angles"])
-                        avg_height = sum(calibration_data["sitting_heights"]) / len(calibration_data["sitting_heights"])
-                        avg_head_shoulder = sum(calibration_data["head_to_shoulder_heights"]) / len(calibration_data["head_to_shoulder_heights"])
-
-                        calibrated_thresholds = {
-                            "slouch_warn": avg_angle + 10,
-                            "slouch_bad": avg_angle + 20,
-                            "z_warn": avg_z_diff - 0.05,
-                            "z_bad": avg_z_diff - 0.15,
-                            "nose_warn": avg_nose - 0.1,
-                            "nose_bad": avg_nose - 0.25,
-                            "eye_warn": avg_eye - 0.1,
-                            "eye_bad": avg_eye - 0.25,
-                            "spine_bad": avg_spine + 15,
-                            "height_drop_threshold": avg_height - 0.02,
-                            "head_shoulder_drop_threshold": avg_head_shoulder - 0.015
-                        }
+                        for k in calibration_targets:
+                            calibrated_avgs[k] = sum(calibration_data[k]) / len(calibration_data[k])
                         print("Calibration complete.")
-                        print("Thresholds:", calibrated_thresholds)
+                        print("Averages:", calibrated_avgs)
 
-            if calibrated_thresholds and mode == "front":
-                shoulder_tilt = abs(left_shoulder.y - right_shoulder.y)
-                # Diagnostic messages for specific posture deviations
-                if shoulder_tilt > 0.03:
-                    posture_status = "Shoulder Tilt / Crunch Detected"
-                    color = (0, 0, 255)
-                elif head_to_shoulder_height < calibrated_thresholds["head_shoulder_drop_threshold"]:
-                    posture_status = "Head Tilt Detected"
-                    color = (0, 0, 255)
-                elif sitting_height < calibrated_thresholds["height_drop_threshold"]:
-                    posture_status = "Overall Height Decrease (Possible Slouch)"
-                    color = (0, 0, 255)
-                elif slouch_angle > calibrated_thresholds["slouch_bad"] or \
-                     z_diff < calibrated_thresholds["z_bad"] or \
-                     z_diff_head_nose < calibrated_thresholds["nose_bad"]:
-                    posture_status = "Slouching!"
-                    color = (0, 0, 255)
-                elif (calibrated_thresholds["slouch_warn"] < slouch_angle <= calibrated_thresholds["slouch_bad"]) or \
-                     (calibrated_thresholds["z_warn"] > z_diff >= calibrated_thresholds["z_bad"]) or \
-                     (calibrated_thresholds["nose_warn"] > z_diff_head_nose >= calibrated_thresholds["nose_bad"]) or \
-                     (0.015 < shoulder_tilt <= 0.03) or \
-                     (calibrated_thresholds["height_drop_threshold"] < sitting_height <= calibrated_thresholds["height_drop_threshold"] + 0.015) or \
-                     (calibrated_thresholds["head_shoulder_drop_threshold"] < head_to_shoulder_height <= calibrated_thresholds["head_shoulder_drop_threshold"] + 0.01):
-                    posture_status = "Moderate Slouch"
-                    color = (0, 165, 255)
-                else:
-                    posture_status = "Great Posture!"
-                    color = (0, 255, 0)
-
-            elif calibrated_thresholds and mode == "side":
-                # STRAIGHTNESS AND FORWARD TILT CHECK: Detect spinal curve and shoulder tilt
-                if spine_angle > calibrated_thresholds.get("spine_bad", 30) - 10 or slouch_angle > 15:
-                    posture_status = "Hunched Spine or Forward Tilt"
-                    color = (0, 0, 255)
-                elif spine_angle > calibrated_thresholds.get("spine_bad", 30) - 15 or slouch_angle > 10:
-                    posture_status = "Moderate Curve or Lean"
-                    color = (0, 165, 255)
-                else:
-                    posture_status = "Good Side Posture"
-                    color = (0, 255, 0)
+            if calibrated_avgs:
+                mode = "side" if (clavicle_length / calibrated_avgs["clavicle_lengths"]) < 0.6 else "front"
+                if mode == "front":
+                    shoulder_tilt = abs(left_shoulder.y - right_shoulder.y)
+                    # Diagnostic messages for specific posture deviations
+                    if shoulder_tilt > 0.2:
+                        posture_status = "Shoulder Tilt / Crunch Detected"
+                        color = (0, 0, 255)
+                    elif percent_change(head_to_shoulder_height, calibrated_avgs["head_to_shoulder_heights"]) > 10.0:
+                        change = percent_change(head_to_shoulder_height, calibrated_avgs["head_to_shoulder_heights"])
+                        print(f"Tilt detected {change}")
+                        posture_status = "Head Tilt Detected"
+                        color = (0, 0, 255)
+                    elif percent_change(sitting_height, calibrated_avgs["sitting_heights"]) > 10.0:
+                        change = percent_change(sitting_height, calibrated_avgs["sitting_heights"])
+                        print(f"Sitting change detected {change}")
+                        posture_status = "Overall Height Decrease (Possible Slouch)"
+                        color = (0, 0, 255)
+                    elif percent_change(slouch_angle, calibrated_avgs["slouch_angles"]) > 5.0:
+                        change = percent_change(slouch_angle, calibrated_avgs["slouch_angles"])
+                        print(f"Slouch detected {change}")
+                        posture_status = "Slouching!"
+                        color = (0, 0, 255)
+                    else:
+                        posture_status = "Great Posture!"
+                        color = (0, 255, 0)
+                elif mode == "side":
+                    # STRAIGHTNESS AND FORWARD TILT CHECK: Detect spinal curve and shoulder tilt
+                    if percent_change(spine_angle, calibrated_avgs["spine_angles"]) > 5.0 or slouch_angle > 15:
+                        posture_status = "Hunched Spine or Forward Tilt"
+                        color = (0, 0, 255)
+                    elif percent_change(slouch_angle, calibrated_avgs["spine_angles"]) > 2.5 or slouch_angle > 10:
+                        posture_status = "Moderate Curve or Lean"
+                        color = (0, 165, 255)
+                    else:
+                        posture_status = "Good Side Posture"
+                        color = (0, 255, 0)
 
             mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -326,6 +310,3 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
 
 cap.release()
 cv.destroyAllWindows()
-
-
-
