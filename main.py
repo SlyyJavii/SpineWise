@@ -27,37 +27,29 @@ def listen_for_speech():
     global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
     recognizer = sr.Recognizer()
     mic = sr.Microphone()
-    try:
-        with mic as source:
-            recognizer.adjust_for_ambient_noise(source)
-            print("[SpeechRecognition] Listening...")
-            while True:
-                try:
-                    print("[DEBUG] Waiting for audio...")
-                    audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
-                    print("[DEBUG] Audio captured")
-                    command = recognizer.recognize_google(audio).lower().strip()
-                    print(f"[SpeechRecognition] Heard: {command}")
-                    if "calibrate" in command:
-                        calibration_start_time = time.time()
-                        is_calibrating = True
-                        calibration_data = {k: [] for k in calibration_data}
-                        print("Calibration countdown started. Get ready...")
-                    elif "switch" in command:
-                        mode = "side" if mode == "front" else "front"
-                        print("Switched to", mode)
-                except sr.WaitTimeoutError:
-                    continue
-                except sr.UnknownValueError:
-                    continue
-                except sr.RequestError:
-                    print("[SpeechRecognition] API unavailable")
-                    break
-    except Exception as e:
-        print("[ERROR] Microphone failed:", e)
+    with mic as source:
+        recognizer.adjust_for_ambient_noise(source)
+        print("[SpeechRecognition] Listening...")
+        while True:
+            try:
+                audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                command = recognizer.recognize_google(audio).lower().strip()
+                print(f"[SpeechRecognition] Heard: {command}")
+                if "calibrate" in command:
+                    calibration_start_time = time.time()
+                    is_calibrating = True
+                    print("Calibration countdown started. Get ready...")
+                elif "switch" in command:
+                    mode = "side" if mode == "front" else "front"
+                    print("Switched to", mode)
+            except sr.WaitTimeoutError:
+                continue
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError:
+                print("[SpeechRecognition] API unavailable")
+                break
 
-# Start the voice thread
-print("[Thread] Starting voice command thread...")
 threading.Thread(target=listen_for_speech, daemon=True).start()
 
 # Initialize MediaPipe drawing and pose estimation modules
@@ -75,14 +67,6 @@ def calculate_angle(v1, v2):
 # Smoothing function to reduce jitter
 def smooth(prev, current, alpha=0.2):
     return (1 - alpha) * prev + alpha * current
-# Lighting normalization function using CLAHE
-def normalize_lighting(frame):
-    lab = cv.cvtColor(frame, cv.COLOR_BGR2LAB)
-    l, a, b = cv.split(lab)
-    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    cl = clahe.apply(l)
-    merged = cv.merge((cl, a, b))
-    return cv.cvtColor(merged, cv.COLOR_LAB2BGR)
 
 def percent_change(a, b):
     return 100 * (a-b) / b
@@ -133,7 +117,6 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
         if not success:
             print("Ignoring empty frame")
             continue
-        frame = normalize_lighting(frame)
 
         posture_status = "No pose detected"
         color = (128, 128, 128)
