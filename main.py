@@ -68,6 +68,14 @@ def calculate_angle(v1, v2):
 def smooth(prev, current, alpha=0.2):
     return (1 - alpha) * prev + alpha * current
 
+def normalize_lighting(frame):
+    lab = cv.cvtColor(frame, cv.COLOR_BGR2LAB)
+    l, a, b = cv.split(lab)
+    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    merged = cv.merge((cl, a, b))
+    return cv.cvtColor(merged, cv.COLOR_LAB2BGR)
+
 def percent_change(a, b):
     return 100 * (a-b) / b
 
@@ -117,6 +125,7 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
         if not success:
             print("Ignoring empty frame")
             continue
+        frame = normalize_lighting(frame)
 
         posture_status = "No pose detected"
         color = (128, 128, 128)
