@@ -19,9 +19,10 @@ mp_pose = mp.solutions.pose
 is_calibrating = False
 calibration_data = {
     "facial_distances": [],
-    "clavicle_distances": [],
+    "torso_distances": [],
     "clavicle_lengths": [],
-    "face_clavicle_heights": []
+    "face_torso_heights": [],
+
 }
 countdown_duration = 3
 hold_duration = 5
@@ -94,9 +95,9 @@ cap = cv.VideoCapture(0)
 cv.namedWindow('Posture Detection')
 
 with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as pose:
-    prev_slouch_angle = 0
-    prev_z_diff_nose = 0
-    prev_spine_angle = 0
+    prev_torso_distances = [0, 0, 0]
+    prev_facial_distances = [0, 0, 0]
+    cache_idx = 0
 
     current_status = "No pose detected"
     last_status_change_time = time.time()
@@ -159,14 +160,28 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                                      z=(left_shoulder.z + right_shoulder.z) / 2,
                                      visibility=1.0)
 
-            clavicle_distance = clavicle.z
-            facial_distance = face.z
+            hip = type(mouth)(x=(left_hip.x + right_hip.x) / 2,
+                                     y=(left_hip.y + right_hip.y) / 2,
+                                     z=(left_hip.z + right_hip.z) / 2,
+                                     visibility=1.0)
+
+            torso = type(mouth)(x=(clavicle.x + hip.x) / 2,
+                                     y=(clavicle.y + hip.y) / 2,
+                                     z=(clavicle.z + hip.z) / 2,
+                                     visibility=1.0)
+
+            prev_torso_distances[cache_idx] = torso.z
+            prev_facial_distances[cache_idx] = face.z
+            cache_idx = (cache_idx + 1) % 3
+
+            torso_distance = np.mean(prev_torso_distances).astype(float)
+            facial_distance = np.mean(prev_facial_distances).astype(float)
             head_tilt_difference = left_ear.y - right_ear.y
 
             clavicle_length = np.linalg.norm(
                 np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
 
-            face_clavicle_height = face.y - clavicle.y
+            face_torso_height = face.y - torso.y
 
             if is_calibrating:
                 elapsed = time.time() - calibration_start_time
@@ -175,10 +190,10 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                     cv.putText(image, f"Starting in: {remaining}s", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                                (0, 255, 255), 2)
                 elif elapsed < countdown_duration + hold_duration:
-                    calibration_data["clavicle_distances"].append(clavicle_distance)
+                    calibration_data["torso_distances"].append(torso_distance)
                     calibration_data["facial_distances"].append(facial_distance)
                     calibration_data["clavicle_lengths"].append(clavicle_length)
-                    calibration_data["face_clavicle_heights"].append(face_clavicle_height)
+                    calibration_data["face_torso_heights"].append(face_torso_height)
                     cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                                (0, 255, 255), 2)
                 else:
@@ -192,18 +207,18 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                 mode = "side" if clavicle_length < calibrated_thresholds["clavicle_length_threshold"] else "front"
                 if mode == "front":
                     facial_avg = avg("facial_distances")
-                    clav_avg = avg("clavicle_distances")
-                    face_clav_height_avg = avg("face_clavicle_heights")
+                    torso_avg = avg("torso_distances")
+                    face_clav_height_avg = avg("face_torso_heights")
 
                     facial_percentage = (facial_distance - facial_avg) / facial_avg
-                    clav_percentage = (clavicle_distance - clav_avg) / clav_avg
-                    height_percentage = (face_clavicle_height - face_clav_height_avg) / face_clav_height_avg
+                    torso_percentage = (torso_distance - torso_avg) / torso_avg
+                    height_percentage = (face_torso_height - face_clav_height_avg) / face_clav_height_avg
 
-                    head_confidence_score += math.floor(abs(facial_percentage) / 0.1)
-                    head_confidence_score += math.floor(abs(head_tilt_difference) / 0.05)
+                    head_confidence_score += math.floor(abs(facial_percentage) / 0.2)
+                    head_confidence_score += math.floor(abs(head_tilt_difference) / 0.075)
                     head_confidence_score = min(7, max(head_confidence_score, 0))
 
-                    body_confidence_score += math.floor(abs(facial_percentage - clav_percentage) / 0.1)
+                    body_confidence_score += math.floor(abs(facial_percentage - torso_percentage) / 0.1)
                     body_confidence_score += math.floor(abs(height_percentage) / 0.1)
                     body_confidence_score = min(7, max(body_confidence_score, 0))
                 elif mode == "side":
@@ -233,10 +248,11 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                     last_log_time = time.time()
 
             average_color = frame[30:310, 175:220].mean((0, 1))
-            negative_color = (255 - average_color[0], 255 - average_color[1], 255 - average_color[2])
+            gray_negative = 0.3 * (255 - average_color[0]) +  0.59 * (255 - average_color[1]) + 0.11 * (255 - average_color[2])
+            final_color = (gray_negative, gray_negative, gray_negative)
 
             mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-            cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, negative_color, 2)
+            cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (gray_negative, 220, gray_negative), 2)
             cv.putText(image, side_label, (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (180, 220, 255), 2)
             #cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv.putText(image, displayed_status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, displayed_color, 2)
@@ -247,10 +263,10 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
 
             cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200), (0, 255 - head_confidence_score * 50, 50), -1)
             cv.putText(image, f"Head Confidence: {head_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                       negative_color, 1)
+                       final_color, 1)
             cv.rectangle(image, (30, 225), (30 + body_confidence_score * 40, 245), (0, 255 - body_confidence_score * 50, 50), -1)
             cv.putText(image, f"Body Confidence: {body_confidence_score}/7", (30, 220), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                       negative_color, 1)
+                       final_color, 1)
 
         cv.imshow('Posture Detection', image)
         key = cv.waitKey(5) & 0xFF
