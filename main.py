@@ -7,11 +7,20 @@ import math
 import speech_recognition as sr
 import threading
 import numpy as np
+from sound_alert_sys  import SoundAlertSystem
+from visual_alert_sys import VisualAlertSystem
+
 
 last_log_time = time.time()
 log_file = open("posture_trend_log.csv", mode='w', newline='')
 csv_writer = csv.writer(log_file)
 csv_writer.writerow(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
+
+
+sound_alert  = SoundAlertSystem()
+visual_alert = VisualAlertSystem()
+#track prev posture status
+prev_bad     = False
 
 
 
@@ -412,21 +421,33 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
                     log_file.flush()
                     last_log_time = time.time()
 
+        # determine if this frame is “bad” posture
+        bad_now = current_status not in {
+            "Good Posture", "Neutral Side Posture",
+            "Great Posture!", "Good Posture!"
+        }
 
-            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-            cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv.putText(image, side_label, (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (180, 220, 255), 2)
-            cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv.putText(image, displayed_status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, displayed_color, 2)
-            if head_tilt_status:
-                cv.putText(image, head_tilt_status, (30, 120), cv.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 0), 2)
-            if shoulder_leaning_forward:
-                cv.putText(image, "Leaning In", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2)
-            cv.rectangle(image, (30, 180), (30 + confidence_score * 40, 200), (0, 255 - confidence_score * 50, 50), -1)
-            cv.putText(image, f"Confidence: {confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        # on good→bad transition, fire alerts
+        if bad_now and not prev_bad:
+            severity = min(0.5 + confidence_score / 14.0, 1.0)
+            sound_alert.trigger_alert(severity)
+            visual_alert.start_flash()
+        # on bad→good transition, stop visual alert
+        elif (not bad_now) and prev_bad:
+            visual_alert.stop_flash()
+        prev_bad = bad_now
 
-
-
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+        cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv.putText(image, side_label, (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (180, 220, 255), 2)
+        cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv.putText(image, displayed_status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, displayed_color, 2)
+        if head_tilt_status:
+            cv.putText(image, head_tilt_status, (30, 120), cv.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 0), 2)
+        if shoulder_leaning_forward:
+            cv.putText(image, "Leaning In", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2)
+        cv.rectangle(image, (30, 180), (30 + confidence_score * 40, 200), (0, 255 - confidence_score * 50, 50), -1)
+        cv.putText(image, f"Confidence: {confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
         cv.imshow('Posture Detection', image)
         key = cv.waitKey(5) & 0xFF
@@ -440,7 +461,3 @@ with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as 
 cap.release()
 cv.destroyAllWindows()
 log_file.close()
-
-
-
-
