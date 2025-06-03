@@ -34,7 +34,7 @@ calibration_data = {
     "torso_distances": [],
     "clavicle_lengths": [],
     "face_torso_heights": [],
-
+    "shoulder_ear_distance": []
 }
 countdown_duration = 3
 hold_duration = 5
@@ -194,6 +194,10 @@ def analyze_posture(image, pose_landmarks):
 
     clavicle_length = np.linalg.norm(
         np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
+    
+    left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y))- np.array ((left_ear.x, left_ear.y)))
+    right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
+    avg_shoulder_ear = (left_shoulder_ear + right_shoulder_ear) / 2
 
     face_torso_height = face.y - torso.y
 
@@ -210,6 +214,7 @@ def analyze_posture(image, pose_landmarks):
             calibration_data["facial_distances"].append(facial_distance)
             calibration_data["clavicle_lengths"].append(clavicle_length)
             calibration_data["face_torso_heights"].append(face_torso_height)
+            calibration_data["shoulder_ear_distance"].append(avg_shoulder_ear)
             cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
         else:
@@ -224,6 +229,8 @@ def analyze_posture(image, pose_landmarks):
             facial_avg = avg("facial_distances")
             torso_avg = avg("torso_distances")
             face_clav_height_avg = avg("face_torso_heights")
+            shoulder_ear_avg = avg("shoulder_ear_distance")
+            shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg
 
             facial_percentage = (facial_distance - facial_avg) / facial_avg
             torso_percentage = (torso_distance - torso_avg) / torso_avg
@@ -235,6 +242,7 @@ def analyze_posture(image, pose_landmarks):
 
             body_confidence_score += math.floor(abs(facial_percentage - torso_percentage) / 0.125)
             body_confidence_score += math.floor(abs(height_percentage) / 0.1)
+            body_confidence_score += math.floor(abs(shoulder_ear_percentage)/0.1)
             body_confidence_score = min(7, max(body_confidence_score, 0))
 
             combined_confidence = math.floor((head_confidence_score + body_confidence_score) / 2) - 1
@@ -246,6 +254,8 @@ def analyze_posture(image, pose_landmarks):
             status_idx = status_enum[combined_confidence]
             status = status_idx[0]
             color = status_idx[1]
+
+
         elif mode == "side":
 
             # Determine which shoulder is closer to screen center
@@ -263,6 +273,8 @@ def analyze_posture(image, pose_landmarks):
             slouch_vector = [shoulder.x - hip.x, shoulder.y - hip.y]
             slouch_angle = calculate_angle(slouch_vector, [0, -1])
 
+
+
     average_color = frame[30:310, 175:220].mean((0, 1))
     final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
 
@@ -273,6 +285,7 @@ def analyze_posture(image, pose_landmarks):
         cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                    (255, 255, 255), 2)
 
+    
     cv.putText(image, status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
     cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200), (0, 255 - head_confidence_score * 50, 50),
@@ -319,7 +332,8 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
             draw_landmarks(annotated_image, face_results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, drawing_styles.DrawingSpec((255, 255, 255), 1, 1))
 
-            analyze_posture(annotated_image, pose_results.pose_landmarks[0])
+            if pose_results.pose_landmarks:
+                analyze_posture(annotated_image, pose_results.pose_landmarks[0])
 
             cv.imshow('Posture Detection', annotated_image)
 
