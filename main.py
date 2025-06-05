@@ -194,7 +194,7 @@ def analyze_posture(image, pose_landmarks):
 
     clavicle_length = np.linalg.norm(
         np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
-    
+
     left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y))- np.array ((left_ear.x, left_ear.y)))
     right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
     avg_shoulder_ear = (left_shoulder_ear + right_shoulder_ear) / 2
@@ -225,12 +225,15 @@ def analyze_posture(image, pose_landmarks):
 
     if calibrated_thresholds and not is_calibrating:
         mode = "side" if clavicle_length < calibrated_thresholds["clavicle_length_threshold"] else "front"
+
+        shoulder_ear_avg = avg("shoulder_ear_distance")
+        shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg
+        status_idx = 0
+
         if mode == "front":
             facial_avg = avg("facial_distances")
             torso_avg = avg("torso_distances")
             face_clav_height_avg = avg("face_torso_heights")
-            shoulder_ear_avg = avg("shoulder_ear_distance")
-            shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg
 
             facial_percentage = (facial_distance - facial_avg) / facial_avg
             torso_percentage = (torso_distance - torso_avg) / torso_avg
@@ -252,14 +255,10 @@ def analyze_posture(image, pose_landmarks):
                 combined_confidence = 4
 
             status_idx = status_enum[combined_confidence]
-            status = status_idx[0]
-            color = status_idx[1]
-
-
         elif mode == "side":
 
             # Determine which shoulder is closer to screen center
-            facing = "left" if left_shoulder.x > right_shoulder.x else "right"
+            facing = "left" if left_shoulder.z > right_shoulder.z else "right"
             if facing == "left":
                 shoulder = right_shoulder
                 hip = right_hip
@@ -269,10 +268,17 @@ def analyze_posture(image, pose_landmarks):
                 hip = left_hip
                 side_label = "Left Side View"
 
-            # Calculate a side-specific slouch angle
-            slouch_vector = [shoulder.x - hip.x, shoulder.y - hip.y]
-            slouch_angle = calculate_angle(slouch_vector, [0, -1])
+            slouch_percentage = min(0, shoulder_ear_percentage * 25)
+            side_confidence_score = min(7, max(math.floor(abs(slouch_percentage)), 0)) - 1
+            if side_confidence_score < 1:
+                side_confidence_score = 0
+            if side_confidence_score > 3:
+                side_confidence_score = 3
 
+            status_idx = status_enum[side_confidence_score]
+
+        status = status_idx[0]
+        color = status_idx[1]
 
 
     average_color = frame[30:310, 175:220].mean((0, 1))
@@ -285,7 +291,7 @@ def analyze_posture(image, pose_landmarks):
         cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                    (255, 255, 255), 2)
 
-    
+
     cv.putText(image, status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
     cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200), (0, 255 - head_confidence_score * 50, 50),
@@ -301,15 +307,15 @@ base_pose_options = python.BaseOptions(model_asset_path=pose_model)
 pose_options = mp.tasks.vision.PoseLandmarkerOptions(
     base_options=base_pose_options,
     running_mode=mp.tasks.vision.RunningMode.VIDEO,
-    min_pose_detection_confidence=0.5,
-    min_tracking_confidence=0.5)
+    min_pose_detection_confidence=0.7,
+    min_tracking_confidence=0.7)
 
 base_face_options = python.BaseOptions(model_asset_path=face_model)
 face_options = mp.tasks.vision.FaceLandmarkerOptions(
     base_options=base_face_options,
     running_mode=mp.tasks.vision.RunningMode.VIDEO,
-    min_face_detection_confidence=0.5,
-    min_tracking_confidence=0.5)
+    min_face_detection_confidence=0.7,
+    min_tracking_confidence=0.7)
 
 cap = cv.VideoCapture(0)
 cv.namedWindow('Posture Detection')
@@ -330,7 +336,7 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             annotated_image = np.copy(frame)
 
             draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
-            draw_landmarks(annotated_image, face_results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, drawing_styles.DrawingSpec((255, 255, 255), 1, 1))
+            #draw_landmarks(annotated_image, face_results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, drawing_styles.DrawingSpec((255, 255, 255), 1, 1))
 
             if pose_results.pose_landmarks:
                 analyze_posture(annotated_image, pose_results.pose_landmarks[0])
