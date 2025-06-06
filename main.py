@@ -273,7 +273,7 @@ def analyze_posture(image, pose_landmarks):
         elif mode == "side":
 
             # Determine which shoulder is closer to screen center
-            facing = "left" if left_shoulder.x > right_shoulder.x else "right"
+            facing = "left" if left_shoulder.z > right_shoulder.z else "right"
             if facing == "left":
                 shoulder = right_shoulder
                 hip = right_hip
@@ -283,7 +283,7 @@ def analyze_posture(image, pose_landmarks):
                 hip = left_hip
                 side_label = "Left Side View"
 
-            slouch_percentage = min(0, shoulder_ear_percentage * 25)
+            slouch_percentage = min(0, shoulder_ear_percentage * 100)
             side_confidence_score = min(7, max(math.floor(abs(slouch_percentage)), 0)) - 1
             if side_confidence_score < 1:
                 side_confidence_score = 0
