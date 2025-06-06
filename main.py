@@ -204,9 +204,6 @@ def analyze_posture(image, pose_landmarks):
 
     avg = lambda k: sum(calibration_data[k]) / len(calibration_data[k]) if calibration_data[k] else 0
 
-    average_color = frame[30:310, 175:220].mean((0, 1))
-    final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
-
     if is_calibrating:
         elapsed = time.time() - calibration_start_time
         if elapsed < countdown_duration:
@@ -234,6 +231,10 @@ def analyze_posture(image, pose_landmarks):
         shoulder_ear_avg = avg("shoulder_ear_distance")
         shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg
         status_idx = 0
+
+        side_confidence_score = 0
+        head_confidence_score = 0
+        body_confidence_score = 0
 
         if mode == "front":
             facial_avg = avg("facial_distances")
@@ -268,9 +269,6 @@ def analyze_posture(image, pose_landmarks):
                 combined_confidence = 4
 
             status_idx = status_enum[combined_confidence]
-            status = status_idx[0]
-            color = status_idx[1]
-
 
         elif mode == "side":
 
@@ -305,21 +303,24 @@ def analyze_posture(image, pose_landmarks):
 
     if mode == "side":
         cv.putText(image, side_label, (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (180, 220, 255), 2)
-        cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7,
-                   (255, 255, 255), 2)
+        cv.rectangle(image, (30, 180), (30 + side_confidence_score * 40, 200),
+                     (0, 255 - side_confidence_score * 50, 50),
+                     -1)
+        cv.putText(image, f"Slouch Confidence: {side_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
+                   final_color, 1)
+    else:
+        cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200),
+                     (0, 255 - head_confidence_score * 50, 50),
+                     -1)
+        cv.putText(image, f"Head Confidence: {head_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
+                   final_color, 1)
+        cv.rectangle(image, (30, 225), (30 + body_confidence_score * 40, 245),
+                     (0, 255 - body_confidence_score * 50, 50),
+                     -1)
+        cv.putText(image, f"Body Confidence: {body_confidence_score}/7", (30, 220), cv.FONT_HERSHEY_SIMPLEX, 0.6,
+                   final_color, 1)
 
-    
     cv.putText(image, status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-    cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200), (0, 255 - head_confidence_score * 50, 50),
-                 -1)
-    cv.putText(image, f"Head Confidence: {head_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-               final_color, 1)
-    cv.rectangle(image, (30, 225), (30 + body_confidence_score * 40, 245), (0, 255 - body_confidence_score * 50, 50),
-                 -1)
-    cv.putText(image, f"Body Confidence: {body_confidence_score}/7", (30, 220), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-               final_color, 1)
-
 base_pose_options = python.BaseOptions(model_asset_path=pose_model)
 pose_options = mp.tasks.vision.PoseLandmarkerOptions(
     base_options=base_pose_options,
