@@ -34,7 +34,8 @@ calibration_data = {
     "torso_distances": [],
     "clavicle_lengths": [],
     "face_torso_heights": [],
-    "shoulder_ear_distance": []
+    "shoulder_ear_distance": [],
+    "clavicle_y": []
 }
 countdown_duration = 3
 hold_duration = 5
@@ -194,7 +195,7 @@ def analyze_posture(image, pose_landmarks):
 
     clavicle_length = np.linalg.norm(
         np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
-
+    
     left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y))- np.array ((left_ear.x, left_ear.y)))
     right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
     avg_shoulder_ear = (left_shoulder_ear + right_shoulder_ear) / 2
@@ -202,6 +203,9 @@ def analyze_posture(image, pose_landmarks):
     face_torso_height = face.y - torso.y
 
     avg = lambda k: sum(calibration_data[k]) / len(calibration_data[k]) if calibration_data[k] else 0
+
+    average_color = frame[30:310, 175:220].mean((0, 1))
+    final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
 
     if is_calibrating:
         elapsed = time.time() - calibration_start_time
@@ -215,6 +219,7 @@ def analyze_posture(image, pose_landmarks):
             calibration_data["clavicle_lengths"].append(clavicle_length)
             calibration_data["face_torso_heights"].append(face_torso_height)
             calibration_data["shoulder_ear_distance"].append(avg_shoulder_ear)
+            calibration_data["clavicle_y"].append(clavicle.y)
             cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
         else:
@@ -239,6 +244,14 @@ def analyze_posture(image, pose_landmarks):
             torso_percentage = (torso_distance - torso_avg) / torso_avg
             height_percentage = (face_torso_height - face_clav_height_avg) / face_clav_height_avg
 
+            clavicle_y_current = clavicle.y
+            clavicle_y_baseline = avg("clavicle_y")
+            clavicle_y_change = clavicle_y_current - clavicle_y_baseline
+            clavicle_y_pct = clavicle_y_change / clavicle_y_baseline if clavicle_y_baseline != 0 else 0
+            if( clavicle_y_pct > 0.03):
+                body_confidence_score += 3
+
+
             head_confidence_score += math.floor(abs(facial_percentage) / 0.15)
             head_confidence_score += math.floor(abs(head_tilt_difference) / 0.075)
             head_confidence_score = min(7, max(head_confidence_score, 0))
@@ -255,10 +268,14 @@ def analyze_posture(image, pose_landmarks):
                 combined_confidence = 4
 
             status_idx = status_enum[combined_confidence]
+            status = status_idx[0]
+            color = status_idx[1]
+
+
         elif mode == "side":
 
             # Determine which shoulder is closer to screen center
-            facing = "left" if left_shoulder.z > right_shoulder.z else "right"
+            facing = "left" if left_shoulder.x > right_shoulder.x else "right"
             if facing == "left":
                 shoulder = right_shoulder
                 hip = right_hip
@@ -291,7 +308,7 @@ def analyze_posture(image, pose_landmarks):
         cv.putText(image, f"Slouch Angle: {round(slouch_angle, 1)} deg", (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                    (255, 255, 255), 2)
 
-
+    
     cv.putText(image, status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
     cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200), (0, 255 - head_confidence_score * 50, 50),
