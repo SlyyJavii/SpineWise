@@ -34,7 +34,8 @@ calibration_data = {
     "torso_distances": [],
     "clavicle_lengths": [],
     "face_torso_heights": [],
-    "shoulder_ear_distance": []
+    "shoulder_ear_distance": [],
+    "clavicle_y": []
 }
 countdown_duration = 3
 hold_duration = 5
@@ -203,6 +204,9 @@ def analyze_posture(image, pose_landmarks):
 
     avg = lambda k: sum(calibration_data[k]) / len(calibration_data[k]) if calibration_data[k] else 0
 
+    average_color = frame[30:310, 175:220].mean((0, 1))
+    final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
+
     if is_calibrating:
         elapsed = time.time() - calibration_start_time
         if elapsed < countdown_duration:
@@ -215,6 +219,7 @@ def analyze_posture(image, pose_landmarks):
             calibration_data["clavicle_lengths"].append(clavicle_length)
             calibration_data["face_torso_heights"].append(face_torso_height)
             calibration_data["shoulder_ear_distance"].append(avg_shoulder_ear)
+            calibration_data["clavicle_y"].append(clavicle.y)
             cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
         else:
@@ -235,6 +240,14 @@ def analyze_posture(image, pose_landmarks):
             facial_percentage = (facial_distance - facial_avg) / facial_avg
             torso_percentage = (torso_distance - torso_avg) / torso_avg
             height_percentage = (face_torso_height - face_clav_height_avg) / face_clav_height_avg
+
+            clavicle_y_current = clavicle.y
+            clavicle_y_baseline = avg("clavicle_y")
+            clavicle_y_change = clavicle_y_current - clavicle_y_baseline
+            clavicle_y_pct = clavicle_y_change / clavicle_y_baseline if clavicle_y_baseline != 0 else 0
+            if( clavicle_y_pct > 0.03):
+                body_confidence_score += 3
+            
 
             head_confidence_score += math.floor(abs(facial_percentage) / 0.15)
             head_confidence_score += math.floor(abs(head_tilt_difference) / 0.075)
@@ -273,10 +286,7 @@ def analyze_posture(image, pose_landmarks):
             slouch_vector = [shoulder.x - hip.x, shoulder.y - hip.y]
             slouch_angle = calculate_angle(slouch_vector, [0, -1])
 
-
-
-    average_color = frame[30:310, 175:220].mean((0, 1))
-    final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
+    
 
     cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (final_color[0], 220, final_color[2]), 2)
 
