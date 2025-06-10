@@ -7,8 +7,23 @@ import math
 import speech_recognition as sr
 import threading
 import numpy as np
+import pygame
+import os
+import time
 from os.path import exists
 from urllib.request import urlretrieve
+
+pygame.init()
+pygame.mixer.init()
+
+beep = pygame.mixer.Sound("bad_posture_alert.wav")
+
+#Globals for posture tracking 
+start_time = None
+loop_started = False 
+last_beep_time = 0
+
+
 
 from mediapipe.tasks import python
 from mediapipe.framework.formats import landmark_pb2
@@ -41,6 +56,8 @@ countdown_duration = 3
 hold_duration = 5
 calibrated_thresholds = {}
 calibration_start_time = 0
+bad_posture_start_time = None  # Variable that will hold how long someone has had bad posture
+alert_active = False  # Checks is the alert is activated 
 
 mode = "front"
 prev_facial_distances = [0, 0, 0, 0, 0, 0]
@@ -267,6 +284,33 @@ def analyze_posture(image, pose_landmarks):
                 combined_confidence = 0
             if combined_confidence > 4:
                 combined_confidence = 4
+
+            global start_time, loop_started, last_beep_time 
+            #Confidence Based Alert Logic
+            alert_threshold = 3 # We can modify this a different confidence score
+            alert_duration = 10 # Holds posture for >= 10 seconds
+            beep_interval = 2 # Seconds between beeps 
+
+            if combined_confidence >= alert_threshold: # Checks whether the current posture is bad by comparing the real-time confidence score to the threshold (I set to three for now)
+                if start_time is None: # Checks if this is the first time bad posture has been detected
+                    start_time = time.time() # Records the current time as the start of the bad posture period, we give the current time in seconds since epoch.
+                else:
+                    elapsed = time.time() - start_time
+                    if elapsed >= alert_duration:
+                        if not loop_started:
+                            print("[Alert] Bad posture detected for 10 seconds. Starting beep loop.")
+                            loop_started = True
+
+                # Beep only if enough time has passed
+                if loop_started and time.time() - last_beep_time >= beep_interval:
+                    beep.play()
+                    last_beep_time = time.time()
+            else:
+                if loop_started:
+                    beep.stop()
+                    print("[Info] Posture corrected. Stopping beeps.")
+                start_time = None
+                loop_started = False
 
             status_idx = status_enum[combined_confidence]
 
