@@ -13,17 +13,12 @@ import time
 from os.path import exists
 from urllib.request import urlretrieve
 
+from mediapipe.tasks.python.components.containers.landmark import NormalizedLandmark
+
 pygame.init()
 pygame.mixer.init()
 
 beep = pygame.mixer.Sound("bad_posture_alert.wav")
-
-#Globals for posture tracking 
-start_time = None
-loop_started = False 
-last_beep_time = 0
-
-
 
 from mediapipe.tasks import python
 from mediapipe.framework.formats import landmark_pb2
@@ -43,34 +38,65 @@ log_file = open("posture_trend_log.csv", mode='w', newline='')
 csv_writer = csv.writer(log_file)
 csv_writer.writerow(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
 
+FACE_LANDMARKS = {
+    "left_eye_center": 159,   # Left eye center
+    "right_eye_center": 386,  # Right eye center
+    "nose_tip": 1,            # Nose tip
+    "nose_bridge": 6,         # Nose bridge
+    "chin": 175,              # Chin center
+    "forehead": 10,           # Forehead center
+    "left_cheek": 234,        # Left cheek
+    "right_cheek": 454,       # Right cheek
+    "left_temple": 127,       # Left temple
+    "right_temple": 356,       # Right temple
+}
+
+POSE_LANDMARKS = {
+    "left_shoulder": PoseLandmark.LEFT_SHOULDER,
+    "right_shoulder": PoseLandmark.RIGHT_SHOULDER,
+    "left_hip": PoseLandmark.LEFT_HIP,
+    "right_hip": PoseLandmark.RIGHT_HIP,
+    "left_ear": PoseLandmark.LEFT_EAR,
+    "right_ear": PoseLandmark.RIGHT_EAR,
+}
+
+ADDITIONAL_METRICS = {
+    "face": ("left_eye_center", "right_eye_center", "nose_tip", "chin"),
+    "hip": ("left_hip", "right_hip"),
+    "clavicle": ("left_shoulder", "right_shoulder"),
+    "torso": ("clavicle", "hip")
+}
+
 is_calibrating = False
 calibration_data = {
     "facial_distances": [],
-    "torso_distances": [],
+    "clavicle_distances": [],
     "clavicle_lengths": [],
-    "face_torso_heights": [],
-    "shoulder_ear_distance": [],
-    "clavicle_y": []
+    "shoulder_ear_dists": [],
+    "slouch_angles": []
 }
+calibration_data_features = {}
+previous_profile = {}
+
 countdown_duration = 3
 hold_duration = 5
 calibrated_thresholds = {}
 calibration_start_time = 0
 bad_posture_start_time = None  # Variable that will hold how long someone has had bad posture
-alert_active = False  # Checks is the alert is activated 
+alert_active = False  # Checks is the alert is activated
 
 mode = "front"
-prev_facial_distances = [0, 0, 0, 0, 0, 0]
-prev_torso_distances = [0, 0, 0, 0, 0, 0]
-cache_idx = 0
 
-status_enum = (
-    ("Good Posture", (0, 220, 0)),
-    ("Early Posture Warning", (0, 220, 0)),
-    ("Significant Postural Issue", (0, 220, 0)),
-    ("Severe Slouch + Lean", (0, 0, 255)),
-    ("Critical Forward Posture", (128, 0, 0))
+posture_status_labels = (
+    ("Good Posture", (0, 255, 0)),
+    ("Moderately Bad Posture", (255, 165, 0)),
+    ("Bad Posture", (255, 0, 0))
 )
+
+#Globals for posture tracking
+start_time = None
+loop_started = False
+last_beep_time = 0
 
 drawing_utils = mp.solutions.drawing_utils
 drawing_styles = mp.solutions.drawing_styles
@@ -116,18 +142,60 @@ def listen_for_speech():
 print("[Thread] Starting voice command thread...")
 threading.Thread(target=listen_for_speech, daemon=True).start()
 
+def profile_from_landmarks(pose_landmarks, face_landmarks):
+    global previous_profile
+    profile = {}
+    if not pose_landmarks or not face_landmarks:
+        return profile
 
-def calculate_angle(v1, v2):
-    dot = v1[0] * v2[0] + v1[1] * v2[1]
-    mag1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
-    mag2 = math.sqrt(v2[0] ** 2 + v2[1] ** 2)
-    angle_rad = math.acos(dot / (mag1 * mag2))
-    return math.degrees(angle_rad)
+    for key, value in FACE_LANDMARKS.items():
+        profile[key] = face_landmarks[0][value]
+    for key, value in POSE_LANDMARKS.items():
+        profile[key] = pose_landmarks[0][value]
 
+    if previous_profile:
+        for key, value in previous_profile.items():
+            if profile.get(key):
+                landmark = profile[key]
+                profile[key] = type(landmark)(x=landmark.x, y=landmark.y, z=smooth(previous_profile[key].z, landmark.z, 0.2), visibility=landmark.visibility)
+
+    for key, value in ADDITIONAL_METRICS.items():
+        attrs = {"x": 0.0, "y": 0.0, "z": 0.0, "visibility": 0.0}
+        for attr in attrs:
+            attrs[attr] = sum(getattr(profile[landmark], attr) for landmark in value) / len(value)
+        profile[key] = type(profile[value[0]])(x=attrs["x"], y=attrs["y"], z=attrs["z"], visibility=attrs["visibility"])
+
+    previous_profile = profile
+    return profile
 
 def smooth(prev, current, alpha=0.2):
     return (1 - alpha) * prev + alpha * current
 
+def gaussian_weight(x, mu, sigma):
+    return np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+
+
+def scale_metric(value, low_threshold, high_threshold, max_score=3):
+    """
+    Scale a metric value to a 0-max_score range based on thresholds.
+
+    Args:
+        value: The metric value to scale
+        low_threshold: Below this = score 0
+        high_threshold: Above this = max_score
+        max_score: Maximum score to return
+
+    Returns:
+        Integer score from 0 to max_score
+    """
+    if abs(value) < low_threshold:
+        return 0
+    elif abs(value) > high_threshold:
+        return max_score
+    else:
+        # Linear interpolation between thresholds
+        ratio = (abs(value) - low_threshold) / (high_threshold - low_threshold)
+        return int(ratio * max_score)
 
 def normalize_lighting(frame):
     lab = cv.cvtColor(frame, cv.COLOR_BGR2LAB)
@@ -152,74 +220,34 @@ def draw_landmarks(frame, landmarks_list, connections, landmark_style):
             connections,
             landmark_style)
 
-def analyze_posture(image, pose_landmarks):
-    global is_calibrating, calibration_data, calibrated_thresholds, calibration_start_time, mode, countdown_duration, hold_duration, prev_facial_distances, prev_torso_distances, cache_idx, status_enum
+def landmark_dist_2d(a, b):
+    return np.linalg.norm(np.array((a.x, a.y)) - np.array((b.x, b.y))).astype(float)
 
-    side_label = ""
+def analyze_posture(image, profile):
+    global is_calibrating, calibration_start_time, countdown_duration, hold_duration, mode, calibration_data, calibrated_thresholds
+
     status = "No pose detected"
-    color = (128, 128, 128)
+    average_color = image[30:310, 175:220].mean((0, 1))
+    color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
 
-    head_confidence_score = 0
-    body_confidence_score = 0
-    slouch_angle = 0
+    if not calibration_start_time:
+        cv.putText(image, "Press 'c' to begin calibration for posture analysis", (30, 45), cv.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        return
 
-    left_shoulder = pose_landmarks[PoseLandmark.LEFT_SHOULDER]
-    right_shoulder = pose_landmarks[PoseLandmark.RIGHT_SHOULDER]
-    if left_shoulder.visibility < 0.5 or right_shoulder.visibility < 0.5:
-        return  # Skip frame if landmarks are too uncertain
-    left_hip = pose_landmarks[PoseLandmark.LEFT_HIP]
-    right_hip = pose_landmarks[PoseLandmark.RIGHT_HIP]
-    left_ear = pose_landmarks[PoseLandmark.LEFT_EAR]
-    right_ear = pose_landmarks[PoseLandmark.RIGHT_EAR]
+    if not profile:
+        return
 
-    nose = pose_landmarks[PoseLandmark.NOSE]
-    left_eye = pose_landmarks[PoseLandmark.LEFT_EYE]
-    right_eye = pose_landmarks[PoseLandmark.RIGHT_EYE]
-    mouth_left = pose_landmarks[PoseLandmark.MOUTH_LEFT]
-    mouth_right = pose_landmarks[PoseLandmark.MOUTH_RIGHT]
-    mouth = type(mouth_left)(x=(mouth_left.x + mouth_right.x) / 2,
-                             y=(mouth_left.y + mouth_right.y) / 2,
-                             z=(mouth_left.z + mouth_right.z) / 2,
-                             visibility=1.0)
+    clavicle_length = landmark_dist_2d(profile["left_shoulder"], profile["right_shoulder"])
+    facial_distance = profile["nose_tip"].z
+    clavicle_distance = profile["clavicle"].z
 
-    face = type(mouth)(x=(left_eye.x + right_eye.x + nose.x + mouth.x) / 4,
-                       y=(left_eye.y + right_eye.y + nose.y + mouth.y) / 4,
-                       z=(left_eye.z + right_eye.z + nose.z + mouth.z) / 4,
-                       visibility=1.0)
+    shoulder_ear_dist = (landmark_dist_2d(profile["left_shoulder"], profile["forehead"]) + landmark_dist_2d(profile["right_shoulder"], profile["forehead"])) / 2
 
-    clavicle = type(mouth)(x=(left_shoulder.x + right_shoulder.x) / 2,
-                           y=(left_shoulder.y + right_shoulder.y) / 2,
-                           z=(left_shoulder.z + right_shoulder.z) / 2,
-                           visibility=1.0)
-
-    hip = type(mouth)(x=(left_hip.x + right_hip.x) / 2,
-                      y=(left_hip.y + right_hip.y) / 2,
-                      z=(left_hip.z + right_hip.z) / 2,
-                      visibility=1.0)
-
-    torso = type(mouth)(x=(clavicle.x + hip.x) / 2,
-                        y=(clavicle.y + hip.y) / 2,
-                        z=(clavicle.z + hip.z) / 2,
-                        visibility=1.0)
-
-    prev_torso_distances[cache_idx] = torso.z
-    prev_facial_distances[cache_idx] = face.z
-    cache_idx = (cache_idx + 1) % 6
-
-    torso_distance = np.mean(prev_torso_distances).astype(float)
-    facial_distance = np.mean(prev_facial_distances).astype(float)
-    head_tilt_difference = left_ear.y - right_ear.y
-
-    clavicle_length = np.linalg.norm(
-        np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
-    
-    left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y))- np.array ((left_ear.x, left_ear.y)))
-    right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
-    avg_shoulder_ear = (left_shoulder_ear + right_shoulder_ear) / 2
-
-    face_torso_height = face.y - torso.y
-
-    avg = lambda k: sum(calibration_data[k]) / len(calibration_data[k]) if calibration_data[k] else 0
+    v1 = [profile["clavicle"].x - profile["nose_tip"].x, profile["clavicle"].y - profile["nose_tip"].y,
+          profile["clavicle"].z - profile["nose_tip"].z]
+    v2 = [profile["clavicle"].x - profile["torso"].x, profile["clavicle"].y - profile["torso"].y,
+          profile["clavicle"].z - profile["torso"].z]
+    slouch_angle = np.arccos(np.dot(v1, v2) / (np.linalg.norm(v1).astype(float) * np.linalg.norm(v2).astype(float)))
 
     if is_calibrating:
         elapsed = time.time() - calibration_start_time
@@ -228,143 +256,56 @@ def analyze_posture(image, pose_landmarks):
             cv.putText(image, f"Starting in: {remaining}s", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
         elif elapsed < countdown_duration + hold_duration:
-            calibration_data["torso_distances"].append(torso_distance)
-            calibration_data["facial_distances"].append(facial_distance)
-            calibration_data["clavicle_lengths"].append(clavicle_length)
-            calibration_data["face_torso_heights"].append(face_torso_height)
-            calibration_data["shoulder_ear_distance"].append(avg_shoulder_ear)
-            calibration_data["clavicle_y"].append(clavicle.y)
             cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
+            calibration_data["facial_distances"].append(facial_distance)
+            calibration_data["clavicle_distances"].append(clavicle_distance)
+            calibration_data["clavicle_lengths"].append(clavicle_length)
+            calibration_data["slouch_angles"].append(slouch_angle)
+            calibration_data["shoulder_ear_dists"].append(shoulder_ear_dist)
         else:
             is_calibrating = False
+
+            for key, value in calibration_data.items():
+                calibration_data_features[key] = {"avg": np.mean(value), "std": np.std(value)}
+
             calibrated_thresholds = {
-                "clavicle_length_threshold": avg("clavicle_lengths") * 0.7
+                "clavicle_length_threshold": calibration_data_features["clavicle_lengths"]["avg"] * 0.7,
             }
-
-    if calibrated_thresholds and not is_calibrating:
+    else:
         mode = "side" if clavicle_length < calibrated_thresholds["clavicle_length_threshold"] else "front"
+        score = 0
+        status = posture_status_labels[0]
 
-        shoulder_ear_avg = avg("shoulder_ear_distance")
-        shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg
-        status_idx = 0
-
-        side_confidence_score = 0
-        head_confidence_score = 0
-        body_confidence_score = 0
+        slouch_avg = calibration_data_features["slouch_angles"]["avg"]
 
         if mode == "front":
-            facial_avg = avg("facial_distances")
-            torso_avg = avg("torso_distances")
-            face_clav_height_avg = avg("face_torso_heights")
-
-            facial_percentage = (facial_distance - facial_avg) / facial_avg
-            torso_percentage = (torso_distance - torso_avg) / torso_avg
-            height_percentage = (face_torso_height - face_clav_height_avg) / face_clav_height_avg
-
-            clavicle_y_current = clavicle.y
-            clavicle_y_baseline = avg("clavicle_y")
-            clavicle_y_change = clavicle_y_current - clavicle_y_baseline
-            clavicle_y_pct = clavicle_y_change / clavicle_y_baseline if clavicle_y_baseline != 0 else 0
-            if( clavicle_y_pct > 0.03):
-                body_confidence_score += 3
+            facial_avg = calibration_data_features["facial_distances"]["avg"]
+            clavicle_avg = calibration_data_features["clavicle_distances"]["avg"]
+            shoulder_ear_avg = calibration_data_features["shoulder_ear_dists"]["avg"]
 
 
-            head_confidence_score += math.floor(abs(facial_percentage) / 0.15)
-            head_confidence_score += math.floor(abs(head_tilt_difference) / 0.075)
-            head_confidence_score = min(7, max(head_confidence_score, 0))
+            facial_diff = (facial_distance - facial_avg)
+            clavicle_diff = (clavicle_distance - clavicle_avg)
+            facial_std = calibration_data_features["facial_distances"]["std"]
+            clavicle_std = calibration_data_features["clavicle_distances"]["std"]
 
-            body_confidence_score += math.floor(abs(facial_percentage - torso_percentage) / 0.125)
-            body_confidence_score += math.floor(abs(height_percentage) / 0.1)
-            body_confidence_score += math.floor(abs(shoulder_ear_percentage)/0.1)
-            body_confidence_score = min(7, max(body_confidence_score, 0))
 
-            combined_confidence = math.floor((head_confidence_score + body_confidence_score) / 2) - 1
-            if combined_confidence < 1:
-                combined_confidence = 0
-            if combined_confidence > 4:
-                combined_confidence = 4
+            slouch_metric = abs(slouch_angle - slouch_avg) * (1 - gaussian_weight(clavicle_diff, clavicle_avg, clavicle_std))
+            head_metric = abs(facial_diff - clavicle_diff) * (1 + gaussian_weight(facial_diff, facial_avg, facial_std * 3) + gaussian_weight(clavicle_diff, clavicle_avg, clavicle_std * 3))
 
-            global start_time, loop_started, last_beep_time 
-            #Confidence Based Alert Logic
-            alert_threshold = 3 # We can modify this a different confidence score
-            alert_duration = 10 # Holds posture for >= 10 seconds
-            beep_interval = 2 # Seconds between beeps 
-
-            if combined_confidence >= alert_threshold: # Checks whether the current posture is bad by comparing the real-time confidence score to the threshold (I set to three for now)
-                if start_time is None: # Checks if this is the first time bad posture has been detected
-                    start_time = time.time() # Records the current time as the start of the bad posture period, we give the current time in seconds since epoch.
-                else:
-                    elapsed = time.time() - start_time
-                    if elapsed >= alert_duration:
-                        if not loop_started:
-                            print("[Alert] Bad posture detected for 10 seconds. Starting beep loop.")
-                            loop_started = True
-
-                # Beep only if enough time has passed
-                if loop_started and time.time() - last_beep_time >= beep_interval:
-                    beep.play()
-                    last_beep_time = time.time()
-            else:
-                if loop_started:
-                    beep.stop()
-                    print("[Info] Posture corrected. Stopping beeps.")
-                start_time = None
-                loop_started = False
-
-            status_idx = status_enum[combined_confidence]
-
+            score = min(2, scale_metric(slouch_metric, 0, 0.25, 2) + scale_metric(head_metric, 0, 0.3, 2))
         elif mode == "side":
+            print(slouch_angle)
 
-            # Determine which shoulder is closer to screen center
-            facing = "left" if left_shoulder.z > right_shoulder.z else "right"
-            if facing == "left":
-                shoulder = right_shoulder
-                hip = right_hip
-                side_label = "Right Side View"
-            else:
-                shoulder = left_shoulder
-                hip = left_hip
-                side_label = "Left Side View"
-
-            slouch_percentage = min(0, shoulder_ear_percentage * 100)
-            side_confidence_score = min(7, max(math.floor(abs(slouch_percentage)), 0)) - 1
-            if side_confidence_score < 1:
-                side_confidence_score = 0
-            if side_confidence_score > 3:
-                side_confidence_score = 3
-
-            status_idx = status_enum[side_confidence_score]
-
-        status = status_idx[0]
-        color = status_idx[1]
-
-
-    average_color = frame[30:310, 175:220].mean((0, 1))
-    final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
-
-    cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (final_color[0], 220, final_color[2]), 2)
-
-    if mode == "side":
-        cv.putText(image, side_label, (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (180, 220, 255), 2)
-        cv.rectangle(image, (30, 180), (30 + side_confidence_score * 40, 200),
-                     (0, 255 - side_confidence_score * 50, 50),
+        status = posture_status_labels[score]
+        cv.rectangle(image, (30, 180), (30 + score * 70, 200),
+                     (0, 255 - score * 50, 50),
                      -1)
-        cv.putText(image, f"Slouch Confidence: {side_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                   final_color, 1)
-    else:
-        cv.rectangle(image, (30, 180), (30 + head_confidence_score * 40, 200),
-                     (0, 255 - head_confidence_score * 50, 50),
-                     -1)
-        cv.putText(image, f"Head Confidence: {head_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                   final_color, 1)
-        cv.rectangle(image, (30, 225), (30 + body_confidence_score * 40, 245),
-                     (0, 255 - body_confidence_score * 50, 50),
-                     -1)
-        cv.putText(image, f"Body Confidence: {body_confidence_score}/7", (30, 220), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                   final_color, 1)
+        cv.putText(image, f"Front Confidence: {score}", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
+                   color, 1)
+        cv.putText(image, status[0], (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, status[1], 2)
 
-    cv.putText(image, status, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 base_pose_options = python.BaseOptions(model_asset_path=pose_model)
 pose_options = mp.tasks.vision.PoseLandmarkerOptions(
     base_options=base_pose_options,
@@ -389,9 +330,10 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             if not success:
                 continue
 
+            frame_rgb = cv.cvtColor(normalize_lighting(frame), cv.COLOR_BGR2RGB)
             timestamp = int(round(time.time() * 1000))
-            pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
-            face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
+            pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+            face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
             pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
             face_results = face_landmarker.detect_for_video(face_image, timestamp)
@@ -400,8 +342,7 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
             #draw_landmarks(annotated_image, face_results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, drawing_styles.DrawingSpec((255, 255, 255), 1, 1))
 
-            if pose_results.pose_landmarks:
-                analyze_posture(annotated_image, pose_results.pose_landmarks[0])
+            analyze_posture(annotated_image, profile_from_landmarks(pose_results.pose_landmarks, face_results.face_landmarks))
 
             cv.imshow('Posture Detection', annotated_image)
 
