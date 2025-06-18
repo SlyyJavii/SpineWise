@@ -52,7 +52,8 @@ calibration_data = {
     "face_mesh_rotation": [],  # Face Mesh head rotation baseline  
     "face_mesh_lean": [],      # Face Mesh forward lean baseline
     "face_mesh_distance": [],  # Face Mesh distance baseline
-    "raw_eye_tilt_samples": [] # NEW: Store raw tilt samples to detect natural asymmetry
+    "raw_eye_tilt_samples": [], # NEW: Store raw tilt samples to detect natural asymmetry
+    "nose_eye_distances": []   # NEW: Store nose-to-eye baseline for looking down detection
 }
 countdown_duration = 3
 hold_duration = 5
@@ -93,13 +94,6 @@ FACE_LANDMARKS = {
     "left_temple": 127,       # Left temple
     "right_temple": 356       # Right temple
 }
-posture_status_labels = {
-    "good": ("Good Posture", (0, 255, 0)),
-    "moderate": ("Moderately Bad Posture", (255, 165, 0)),  # Orange
-    "bad": ("Bad Posture", (255, 0, 0))  # Red
-}
-
-# Simplified 3-tier posture status system
 posture_status_labels = {
     "good": ("Good Posture", (0, 255, 0)),
     "moderate": ("Moderately Bad Posture", (255, 165, 0)),  # Orange
@@ -190,17 +184,17 @@ def get_posture_status(confidence_score, max_score=7):
 def calculate_head_metrics_from_face_mesh(face_landmarks):
     """
     Calculate head orientation metrics using Face Mesh landmarks.
-    Returns: (head_tilt, head_rotation, head_forward_lean, face_center_z, tilt_direction)
+    Returns: (head_tilt, head_rotation, head_forward_lean, face_center_z, tilt_direction, nose_eye_distance, left_cheek, right_cheek)
     """
     if not face_landmarks or len(face_landmarks) == 0:
-        return 0, 0, 0, 0, "none"
+        return 0, 0, 0, 0, "none", 0, None, None
     
     landmarks = face_landmarks[0]  # Get first face
     
     # Debug: Check landmark count
     if len(landmarks) < 468:
         print(f"[DEBUG] Insufficient face landmarks: {len(landmarks)}/468")
-        return 0, 0, 0, 0, "none"
+        return 0, 0, 0, 0, "none", 0, None, None
     
     try:
         # Extract key landmarks
@@ -212,9 +206,11 @@ def calculate_head_metrics_from_face_mesh(face_landmarks):
         forehead = landmarks[FACE_LANDMARKS["forehead"]]
         left_temple = landmarks[FACE_LANDMARKS["left_temple"]]
         right_temple = landmarks[FACE_LANDMARKS["right_temple"]]
+        left_cheek = landmarks[FACE_LANDMARKS["left_cheek"]]   # Use as ear replacement
+        right_cheek = landmarks[FACE_LANDMARKS["right_cheek"]] # Use as ear replacement
         
-        # 1. HEAD TILT: Calculate raw difference FIRST, then get absolute value
-        raw_eye_tilt = left_eye.y - right_eye.y  # Positive = tilted left, Negative = tilted right
+        # 1. HEAD TILT: Calculate raw difference using CHEEKS instead of ears
+        raw_eye_tilt = left_cheek.y - right_cheek.y  # Positive = tilted left, Negative = tilted right
         head_tilt_absolute = abs(raw_eye_tilt)   # Always positive for scoring
         
         # Determine tilt direction for debugging
@@ -235,11 +231,15 @@ def calculate_head_metrics_from_face_mesh(face_landmarks):
         # 4. Overall face center Z for distance tracking
         face_center_z = (left_eye.z + right_eye.z + nose_tip.z + chin.z) / 4
         
-        return head_tilt_absolute, head_rotation, head_forward_lean, face_center_z, tilt_direction
+        # 5. LOOKING DOWN DETECTION - Nose to eye center distance
+        eye_center_y = (left_eye.y + right_eye.y) / 2
+        nose_eye_distance = nose_tip.y - eye_center_y  # Positive when nose is below eyes (looking down)
+        
+        return head_tilt_absolute, head_rotation, head_forward_lean, face_center_z, tilt_direction, nose_eye_distance, left_cheek, right_cheek
         
     except (IndexError, AttributeError) as e:
         print(f"[DEBUG] Error accessing face landmarks: {e}")
-        return 0, 0, 0, 0, "error"
+        return 0, 0, 0, 0, "error", 0, None, None
 
 drawing_utils = mp.solutions.drawing_utils
 drawing_styles = mp.solutions.drawing_styles
@@ -400,18 +400,36 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     torso_distance = np.mean(prev_torso_distances).astype(float)
     facial_distance = np.mean(prev_facial_distances).astype(float)
     
-    # Get Face Mesh head metrics (more accurate than pose-based)
-    face_tilt, face_rotation, face_lean, face_distance, tilt_direction = calculate_head_metrics_from_face_mesh(face_landmarks)
+    # Get Face Mesh head metrics (ENHANCED with looking down detection and cheek landmarks)
+    face_tilt, face_rotation, face_lean, face_distance, tilt_direction, nose_eye_distance, left_cheek, right_cheek = calculate_head_metrics_from_face_mesh(face_landmarks)
     
-    # LEGACY: Keep pose-based tilt for fallback if Face Mesh fails
-    raw_head_tilt = left_ear.y - right_ear.y if left_ear.visibility > 0.5 and right_ear.visibility > 0.5 else 0
+    # NEW: Use Face Mesh cheeks as ear replacements for better accuracy
+    if left_cheek is not None and right_cheek is not None:
+        # Use Face Mesh cheek landmarks instead of pose ear landmarks
+        left_ear = left_cheek
+        right_ear = right_cheek
+        raw_head_tilt = left_cheek.y - right_cheek.y  # Face Mesh based tilt
+        print(f"[DEBUG] Using Face Mesh cheeks for ear positions")
+    else:
+        # Fallback to pose-based ears if Face Mesh fails
+        raw_head_tilt = left_ear.y - right_ear.y if left_ear.visibility > 0.5 and right_ear.visibility > 0.5 else 0
+        print(f"[DEBUG] Fallback to pose ear landmarks")
+    
     head_tilt_difference = abs(raw_head_tilt)
 
     clavicle_length = np.linalg.norm(
         np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
     
-    left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y))- np.array ((left_ear.x, left_ear.y)))
-    right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
+    # Calculate shoulder-ear distances using Face Mesh cheeks when available
+    if left_cheek is not None and right_cheek is not None:
+        # Use Face Mesh cheek landmarks for more accurate shoulder-ear calculations
+        left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y)) - np.array((left_cheek.x, left_cheek.y)))
+        right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_cheek.x, right_cheek.y)))
+    else:
+        # Fallback to pose ear landmarks
+        left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y)) - np.array((left_ear.x, left_ear.y)))
+        right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
+    
     avg_shoulder_ear = (left_shoulder_ear + right_shoulder_ear) / 2
 
     face_torso_height = face.y - torso.y
@@ -433,19 +451,30 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             calibration_data["shoulder_ear_distance"].append(avg_shoulder_ear)
             calibration_data["clavicle_y"].append(clavicle.y)
             
-            # NEW: Calibrate Face Mesh baselines
+            # Calibrate Face Mesh baselines
             calibration_data["face_mesh_tilt"].append(face_tilt)
             calibration_data["face_mesh_rotation"].append(face_rotation)
             calibration_data["face_mesh_lean"].append(face_lean)
             calibration_data["face_mesh_distance"].append(face_distance)
             
-            # NEW: Store raw tilt samples to detect natural asymmetry
+            # NEW: Calibrate nose-eye distance baseline for looking down detection
+            calibration_data["nose_eye_distances"].append(nose_eye_distance)
+            
+            # Store raw tilt samples using Face Mesh cheeks when available
             if face_landmarks and len(face_landmarks) > 0:
                 landmarks = face_landmarks[0]
-                left_eye = landmarks[FACE_LANDMARKS["left_eye_center"]]
-                right_eye = landmarks[FACE_LANDMARKS["right_eye_center"]]
-                raw_tilt_sample = left_eye.y - right_eye.y
-                calibration_data["raw_eye_tilt_samples"].append(raw_tilt_sample)
+                if len(landmarks) >= 468:
+                    # Use Face Mesh cheek landmarks for tilt calibration
+                    left_cheek_landmark = landmarks[FACE_LANDMARKS["left_cheek"]]
+                    right_cheek_landmark = landmarks[FACE_LANDMARKS["right_cheek"]]
+                    raw_tilt_sample = left_cheek_landmark.y - right_cheek_landmark.y
+                    calibration_data["raw_eye_tilt_samples"].append(raw_tilt_sample)
+                else:
+                    # Fallback to eye landmarks if cheeks not available
+                    left_eye = landmarks[FACE_LANDMARKS["left_eye_center"]]
+                    right_eye = landmarks[FACE_LANDMARKS["right_eye_center"]]
+                    raw_tilt_sample = left_eye.y - right_eye.y
+                    calibration_data["raw_eye_tilt_samples"].append(raw_tilt_sample)
             
             cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
@@ -469,8 +498,10 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 "face_mesh_rotation_baseline": avg("face_mesh_rotation"), 
                 "face_mesh_lean_baseline": avg("face_mesh_lean"),
                 "face_mesh_distance_baseline": avg("face_mesh_distance"),
-                # NEW: Natural tilt baseline for symmetric detection
-                "natural_tilt_baseline": natural_tilt_baseline
+                # Natural tilt baseline for symmetric detection
+                "natural_tilt_baseline": natural_tilt_baseline,
+                # NEW: Nose-eye distance baseline for looking down detection
+                "nose_eye_baseline": avg("nose_eye_distances")
             }
             # Set calibration end time for grace period
             global calibration_end_time
@@ -488,19 +519,21 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             face_clav_height_avg = avg("face_torso_heights")
             shoulder_ear_avg = avg("shoulder_ear_distance")
             clavicle_y_baseline = avg("clavicle_y")
+            nose_eye_avg = calibrated_thresholds["nose_eye_baseline"]
 
             facial_percentage = (facial_distance - facial_avg) / facial_avg if facial_avg != 0 else 0
             torso_percentage = (torso_distance - torso_avg) / torso_avg if torso_avg != 0 else 0
             height_percentage = (face_torso_height - face_clav_height_avg) / face_clav_height_avg if face_clav_height_avg != 0 else 0
             shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
             
+            # NEW: Looking down percentage using same pattern as other metrics
+            looking_down_percentage = (nose_eye_distance - nose_eye_avg) / nose_eye_avg if nose_eye_avg != 0 else 0
+            
             # ENHANCED: More responsive clavicle Y-drop detection
             clavicle_y_pct = (clavicle.y - clavicle_y_baseline) / clavicle_y_baseline if clavicle_y_baseline != 0 else 0
             # Also check absolute drop to catch cases where baseline calibration was poor
             absolute_clavicle_drop = clavicle.y - clavicle_y_baseline
 
-            # FIXED: Separate and non-overlapping confidence metrics
-            
             # FIXED: Proper symmetric head tilt calculation with baseline normalization
             head_tilt_baseline = calibrated_thresholds.get("head_tilt_baseline", 0)
             normalized_head_tilt = abs(raw_head_tilt - head_tilt_baseline)  # Remove baseline bias and use absolute value
@@ -508,13 +541,19 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             # Head-specific metrics (only head position and tilt)
             head_forward_score = scale_metric(facial_percentage, 0.08, 0.25, 3)  # Slightly more sensitive
             head_tilt_score = scale_metric(normalized_head_tilt, 0.02, 0.08, 3)   # More sensitive with proper normalization
-            head_confidence_score = min(head_forward_score + head_tilt_score, 7)
+            
+            # NEW: Looking down score using same scale_metric function
+            looking_down_score = scale_metric(looking_down_percentage, 0.40, 0.60, 4)  # 15%-40% change triggers penalty
+            
+            head_confidence_score = min(head_forward_score + head_tilt_score + looking_down_score, 7)
 
-            # Debug head tilt when significant
+            # Debug head tilt when significant (now using Face Mesh cheeks)
             if normalized_head_tilt > 0.03:
-                tilt_direction = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
+                tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
+                landmark_source = "Face Mesh cheeks" if (left_cheek is not None and right_cheek is not None) else "Pose ears"
                 print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
-                      f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction}, Score: {head_tilt_score}/3")
+                      f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
+                      f"Source: {landmark_source}, Score: {head_tilt_score}/3")
 
             # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
             torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)      
@@ -543,31 +582,6 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                       f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
                       f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
 
-            # Alert logic (unchanged)
-            alert_threshold = 3
-            alert_duration = 10
-            beep_interval = 2
-
-            if combined_confidence >= alert_threshold:
-                if start_time is None:
-                    start_time = time.time()
-                else:
-                    elapsed = time.time() - start_time
-                    if elapsed >= alert_duration:
-                        if not loop_started:
-                            print("[Alert] Bad posture detected for 10 seconds. Starting beep loop.")
-                            loop_started = True
-
-                if loop_started and time.time() - last_beep_time >= beep_interval:
-                    beep.play()
-                    last_beep_time = time.time()
-            else:
-                if loop_started:
-                    beep.stop()
-                    print("[Info] Posture corrected. Stopping beeps.")
-                start_time = None
-                loop_started = False
-
             # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(combined_confidence, 7)
             
@@ -579,7 +593,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             alert_duration = 10
             beep_interval = 2
 
-            if stable_confidence >= alert_threshold and not is_transitioning:
+            if (stable_confidence >= alert_threshold or head_confidence_score >= alert_threshold) and not is_transitioning:
                 if start_time is None:
                     start_time = time.time()
                 else:
@@ -604,18 +618,20 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             color = posture_status_labels[stable_posture][1]
 
         elif mode == "side":
-            # Side view analysis
+            # Side view analysis - using Face Mesh cheeks when available for ear calculations
             facing = "left" if left_shoulder.z > right_shoulder.z else "right"
             if facing == "left":
                 shoulder = right_shoulder
                 hip = right_hip
-                ear = right_ear
-                side_label = "Right Side View"
+                # Use Face Mesh right cheek if available, otherwise fall back to pose ear
+                ear = right_cheek if right_cheek is not None else right_ear
+                side_label = "Right Side View (Face Mesh)" if right_cheek is not None else "Right Side View (Pose)"
             else:
                 shoulder = left_shoulder
                 hip = left_hip
-                ear = left_ear
-                side_label = "Left Side View"
+                # Use Face Mesh left cheek if available, otherwise fall back to pose ear
+                ear = left_cheek if left_cheek is not None else left_ear
+                side_label = "Left Side View (Face Mesh)" if left_cheek is not None else "Left Side View (Pose)"
 
             shoulder_ear_avg = avg("shoulder_ear_distance")
             shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
@@ -652,27 +668,42 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             cv.circle(image, (int(nose_tip.x * w), int(nose_tip.y * h)), 5, (0, 0, 255), -1)    # Red nose tip
             cv.circle(image, (int(nose_bridge.x * w), int(nose_bridge.y * h)), 5, (255, 255, 0), -1)  # Yellow bridge
             
-            # Draw temples
-            left_temple = landmarks[FACE_LANDMARKS["left_temple"]]
-            right_temple = landmarks[FACE_LANDMARKS["right_temple"]]
-            cv.circle(image, (int(left_temple.x * w), int(left_temple.y * h)), 4, (255, 0, 255), -1)  # Magenta temples
-            cv.circle(image, (int(right_temple.x * w), int(right_temple.y * h)), 4, (255, 0, 255), -1)
+            # Draw cheek landmarks (now used as ear replacements)
+            left_cheek_landmark = landmarks[FACE_LANDMARKS["left_cheek"]]
+            right_cheek_landmark = landmarks[FACE_LANDMARKS["right_cheek"]]
+            cv.circle(image, (int(left_cheek_landmark.x * w), int(left_cheek_landmark.y * h)), 4, (0, 255, 255), -1)  # Cyan cheeks
+            cv.circle(image, (int(right_cheek_landmark.x * w), int(right_cheek_landmark.y * h)), 4, (0, 255, 255), -1)
             
             # Show Face Mesh metrics
             cv.putText(image, f"Face Tilt: {face_tilt:.4f}", (w//2 - 80, 30), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv.putText(image, f"Face Rotation: {face_rotation:.4f}", (w//2 - 80, 50), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv.putText(image, f"Face Lean: {face_lean:.4f}", (w//2 - 80, 70), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv.putText(image, f"Looking Down: {nose_eye_distance:.4f}", (w//2 - 80, 90), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv.putText(image, f"Head Tilt (Cheeks): {raw_head_tilt:.4f}", (w//2 - 80, 110), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
-            print(f"[DEBUG] Face metrics - Tilt: {face_tilt:.4f}, Rotation: {face_rotation:.4f}, Lean: {face_lean:.4f}")
+            print(f"[DEBUG] Face metrics - Tilt: {face_tilt:.4f}, Rotation: {face_rotation:.4f}, Lean: {face_lean:.4f}, Looking Down: {nose_eye_distance:.4f}, Head Tilt (Cheeks): {raw_head_tilt:.4f}")
         except Exception as e:
             print(f"[DEBUG] Error drawing face mesh overlay: {e}")
     elif debug_face:
         print("[DEBUG] Face Mesh debug enabled but no landmarks available")
 
-    # DEBUG: Visual ear position overlay (optional - remove in production)
-    debug_ears = False  # Set to True to see ear landmark positions
-    if debug_ears and calibrated_thresholds:
-        # Draw horizontal lines at ear positions
+    # DEBUG: Visual cheek position overlay (replaces ear overlay since we're using cheeks as ears)
+    debug_cheeks = False  # Set to True to see cheek landmark positions
+    if debug_cheeks and calibrated_thresholds and left_cheek is not None and right_cheek is not None:
+        # Draw horizontal lines at cheek positions (now used as ear replacements)
+        h, w = image.shape[:2]
+        left_cheek_pixel_y = int(left_cheek.y * h)
+        right_cheek_pixel_y = int(right_cheek.y * h)
+        
+        cv.line(image, (0, left_cheek_pixel_y), (w//3, left_cheek_pixel_y), (255, 0, 0), 2)  # Blue line for left cheek
+        cv.line(image, (2*w//3, right_cheek_pixel_y), (w, right_cheek_pixel_y), (0, 255, 0), 2)  # Green line for right cheek
+        
+        # Show tilt values
+        cv.putText(image, f"LC: {left_cheek.y:.3f}", (10, left_cheek_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+        cv.putText(image, f"RC: {right_cheek.y:.3f}", (2*w//3 + 10, right_cheek_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv.putText(image, f"Cheek Tilt: {raw_head_tilt:.4f}", (w//2 - 60, 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+    elif debug_cheeks and calibrated_thresholds:
+        # Fallback debug for pose ears if Face Mesh cheeks not available
         h, w = image.shape[:2]
         left_ear_pixel_y = int(left_ear.y * h)
         right_ear_pixel_y = int(right_ear.y * h)
@@ -681,9 +712,9 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
         cv.line(image, (2*w//3, right_ear_pixel_y), (w, right_ear_pixel_y), (0, 255, 0), 2)  # Green line for right ear
         
         # Show tilt values
-        cv.putText(image, f"L: {left_ear.y:.3f}", (10, left_ear_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-        cv.putText(image, f"R: {right_ear.y:.3f}", (2*w//3 + 10, right_ear_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv.putText(image, f"Tilt: {raw_head_tilt:.4f}", (w//2 - 60, 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        cv.putText(image, f"LE: {left_ear.y:.3f}", (10, left_ear_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+        cv.putText(image, f"RE: {right_ear.y:.3f}", (2*w//3 + 10, right_ear_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv.putText(image, f"Pose Tilt: {raw_head_tilt:.4f}", (w//2 - 60, 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
     # Display information
     average_color = image[30:310, 175:220].mean((0, 1))
@@ -759,13 +790,6 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             face_results = face_landmarker.detect_for_video(face_image, timestamp)
             annotated_image = np.copy(frame)
 
-            # DEBUG: Print face detection status
-            face_detected = bool(face_results.face_landmarks)
-            if not face_detected:
-                print("[DEBUG] No face detected this frame")
-            else:
-                print(f"[DEBUG] Face detected with {len(face_results.face_landmarks[0])} landmarks")
-
             draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
 
             if pose_results.pose_landmarks:
@@ -789,13 +813,13 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
                     builtins.debug_face = True
                 print(f"[DEBUG] Face Mesh visualization: {'ON' if builtins.debug_face else 'OFF'}")
             elif key == ord('d'):
-                # Toggle debug ear visualization  
+                # Toggle debug cheek visualization (replaces ear debug since we use cheeks as ears)
                 import builtins
-                if hasattr(builtins, 'debug_ears'):
-                    builtins.debug_ears = not builtins.debug_ears
+                if hasattr(builtins, 'debug_cheeks'):
+                    builtins.debug_cheeks = not builtins.debug_cheeks
                 else:
-                    builtins.debug_ears = True
-                print(f"[DEBUG] Ear visualization: {'ON' if builtins.debug_ears else 'OFF'}")
+                    builtins.debug_cheeks = True
+                print(f"[DEBUG] Cheek visualization: {'ON' if builtins.debug_cheeks else 'OFF'}")
             elif key == ord('i'):
                 # Print current detection info
                 print(f"[INFO] Face detected: {bool(face_results.face_landmarks)}")
