@@ -24,6 +24,11 @@ beep = pygame.mixer.Sound("bad_posture_alert.wav")
 start_time = None
 loop_started = False 
 last_beep_time = 0
+red_overlay_active = False #Added global variable for visual alert. creates a Boolean flag (a variable that can be either True or False) named red_overlay_active.
+fade_in_speed = 0.02 #Controls how fast the fade happens
+
+
+
 
 from mediapipe.tasks import python
 from mediapipe.framework.formats import landmark_pb2
@@ -617,6 +622,8 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                         if not loop_started:
                             print("[Alert] Bad posture detected for 10 seconds. Starting beep loop.")
                             loop_started = True
+                            global red_overlay_active
+                            red_overlay_active = True 
 
                 if loop_started and time.time() - last_beep_time >= beep_interval:
                     beep.play()
@@ -625,6 +632,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 if loop_started:
                     beep.stop()
                     print("[Info] Posture corrected. Stopping beeps.")
+                    red_overlay_active = False #Turns off red overlay
                 start_time = None
                 loop_started = False
 
@@ -808,9 +816,20 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
 
             if pose_results.pose_landmarks:
-                analyze_posture(annotated_image, pose_results.pose_landmarks[0], face_results.face_landmarks)
+                analyze_posture(annotated_image, pose_results.pose_landmarks[0])
+                
+            if red_overlay_active:
+                global red_overlay_opacity 
+                red_overlay_opacity = min(red_overlay_opacity + fade_in_speed, 0.3) #We will increase opactiy gradually, creating a fade-in effect.
+                red_layer = annotated_image.copy() # Prevents modification of the original frame, we use a copy
+                red_layer[:] = (0,0,25) # Filling every pixel with red
+                annotated_image = cv.addWeighted(annotated_image,1 - red_overlay_opacity,red_layer,red_overlay_opacity,0) # Making the color slightly transparent
+            else:
+                red_overlay_opacity = 0.0 # Reset fade if posture is corrected
+            cv.imshow('Posture Detection', annotated_image) 
+            
 
-            cv.imshow('Posture Detection', annotated_image)
+
 
             key = cv.waitKey(5) & 0xFF
             if key == 27:
