@@ -100,6 +100,23 @@ posture_status_labels = {
     "bad": ("Bad Posture", (255, 0, 0))  # Red
 }
 
+#globals for data logger
+last_logged_time = 0 #for rate limiting dataset logging
+is_manual_labeling = False #start in auto mode by default
+
+
+#data logger
+def log_posture_sample(features, label, filename = "posture_dataset.csv"):
+    header = list(features.keys()) + ["label"]
+    row = list(features.values()) + [label]
+
+    file_exists = os.path.exists(filename)
+    with open(filename, mode = 'a', newline = '') as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(header)
+        writer.writerow(row)
+
 def update_posture_stability(confidence_score, max_score=7):
     """
     Update posture stability system with consistency buffer and state confirmation.
@@ -409,7 +426,6 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
         left_ear = left_cheek
         right_ear = right_cheek
         raw_head_tilt = left_cheek.y - right_cheek.y  # Face Mesh based tilt
-        print(f"[DEBUG] Using Face Mesh cheeks for ear positions")
     else:
         # Fallback to pose-based ears if Face Mesh fails
         raw_head_tilt = left_ear.y - right_ear.y if left_ear.visibility > 0.5 and right_ear.visibility > 0.5 else 0
@@ -587,6 +603,28 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             
             # Use stable posture for alert logic (prevents false alarms)
             stable_confidence = 1 if stable_posture == "good" else (3 if stable_posture == "moderate" else 5)
+
+            #integration for the data logging
+            status = display_status
+            color = posture_status_labels[stable_posture][1]
+
+            #auto dataset logger(logs once every 5 seconds)
+            global last_logged_time
+            current_time = time.time()
+            if not is_manual_labeling and current_time - last_logged_time >= 5:
+                features = {
+                    "head_tilt": normalized_head_tilt,
+                    "clavicle_drop_pct": clavicle_y_pct,
+                    "face_lean": face_lean,
+                    "shoulder_ear_pct": shoulder_ear_percentage,
+                    "torso_lean_prc": torso_percentage,
+                    "looking_down_pct": looking_down_percentage
+                }
+                global latest_features
+                latest_features = features
+                log_posture_sample(features, stable_posture)
+                print(f"[LOG] logged posture sample: {stable_posture}")
+                last_logged_time = current_time
             
             # Alert logic (using stable confidence to prevent false alarms)
             alert_threshold = 3
@@ -800,6 +838,22 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
             key = cv.waitKey(5) & 0xFF
             if key == 27:
                 break
+            #keys for the manual data logging
+            elif key == ord('l'):
+                is_manual_labeling = not is_manual_labeling
+                print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
+            elif is_manual_labeling and key == ord('g'):
+                label = "good"
+                log_posture_sample(latest_features, label)
+                print(f"[MANUAL] logged GOOD posture sample.")
+            elif is_manual_labeling and key == ord('b'):
+                label = "bad"
+                log_posture_sample(latest_features, label)
+                print(f"[MANUAL] logged BAD posture sample.")
+            elif is_manual_labeling and key == ord('m'):
+                label = "moderate"
+                log_posture_sample(latest_features, label)
+                print(f"[MANUAL] Logged MODERATE posture sample.")
             elif key == ord('c'):
                 calibration_start_time = time.time()
                 is_calibrating = True
