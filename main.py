@@ -126,6 +126,7 @@ def update_posture_stability(confidence_score, max_score=7):
     global posture_buffer, confidence_buffer, current_stable_posture, posture_transition_time
     global smoothed_confidence, calibration_end_time
     
+    
     current_time = time.time()
     
     # Check if we're in calibration grace period
@@ -632,7 +633,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     "torso_lean_prc": torso_percentage,
                     "looking_down_pct": looking_down_percentage
                 }
-                global latest_features
+                #global latest_features
                 latest_features = features
                 log_posture_sample(features, stable_posture)
                 print(f"[LOG] logged posture sample: {stable_posture}")
