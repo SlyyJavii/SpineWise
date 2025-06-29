@@ -1,0 +1,5 @@
+mediapipe==0.10.9
+opencv-python==4.9.0.80
+numpy==1.26.4
+pygame==2.5.2
+SpeechRecognition==3.10.1
