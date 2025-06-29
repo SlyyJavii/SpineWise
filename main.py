@@ -103,6 +103,7 @@ posture_status_labels = {
 #globals for data logger
 last_logged_time = 0 #for rate limiting dataset logging
 is_manual_labeling = False #start in auto mode by default
+latest_voice_label = None  # To hold voice input while labeling mode is active
 
 
 #data logger
@@ -265,6 +266,7 @@ default_face_connections_style = mp.solutions.drawing_styles.get_default_face_me
 
 def listen_for_speech():
     global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
+    global latest_voice_label, is_manual_labeling
     try:
         recognizer = sr.Recognizer()
         mic = sr.Microphone()
@@ -287,6 +289,15 @@ def listen_for_speech():
                         print("[SpeechRecognition] Escape command received. Exiting program...")
                         import os
                         os._exit(0)
+
+                    elif is_manual_labeling:
+                        if "good" in command:
+                            latest_voice_label = "good"
+                        elif "bad" in command:
+                            latest_voice_label = "bad"
+                        elif "moderate" in command:
+                            latest_voice_label = "moderate"
+
                 except sr.WaitTimeoutError:
                     continue
                 except sr.UnknownValueError:
@@ -356,6 +367,7 @@ def scale_metric(value, low_threshold, high_threshold, max_score=3):
 def analyze_posture(image, pose_landmarks, face_landmarks=None):
     global is_calibrating, calibration_data, calibrated_thresholds, calibration_start_time, mode, countdown_duration, hold_duration, prev_facial_distances, prev_torso_distances, cache_idx
     global start_time, loop_started, last_beep_time
+    global latest_voice_label, last_voice_log_time, latest_features
 
     side_label = ""
     status = "No pose detected"
@@ -625,6 +637,26 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 log_posture_sample(features, stable_posture)
                 print(f"[LOG] logged posture sample: {stable_posture}")
                 last_logged_time = current_time
+
+            global last_voice_log_time
+            if 'last_voice_log_time' not in globals():
+                last_voice_log_time = 0
+            if is_manual_labeling and latest_voice_label and (current_time - last_voice_log_time) > 1.5:
+                voice_features = {
+                    "head_tilt": normalized_head_tilt,
+                    "clavicle_drop_pct": clavicle_y_pct,
+                    "face_lean": face_lean,
+                    "shoulder_ear_pct": shoulder_ear_percentage,
+                    "torso_lean_prc": torso_percentage,
+                    "looking_down_pct": looking_down_percentage
+                }
+                latest_features = voice_features
+                log_posture_sample(voice_features, latest_voice_label)
+                print(f"[VOICE] Logged {latest_voice_label.upper()} posture sample via voice.")
+                last_logged_time = current_time
+                last_voice_log_time = current_time
+                latest_voice_label = None
+
             
             # Alert logic (using stable confidence to prevent false alarms)
             alert_threshold = 3
@@ -884,6 +916,9 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
                 print(f"[INFO] Calibrated: {bool(calibrated_thresholds)}")
                 print(f"[INFO] Current stable posture: {current_stable_posture}")
                 print(f"[INFO] Smoothed confidence: {smoothed_confidence:.2f}")
+
+                #Code for audio recognition for manual data logging
+
 
 cap.release()
 cv.destroyAllWindows()
