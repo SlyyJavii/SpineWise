@@ -13,6 +13,7 @@ import time
 from os.path import exists
 from urllib.request import urlretrieve
 from posture_image_logger import save_posture_image, initialize_folders
+
 # Initialize folders for image logging
 initialize_folders()
 pygame.init()

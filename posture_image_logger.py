@@ -9,8 +9,8 @@ def initialize_folders(base_path="posture_images"):
         os.makedirs(os.path.join(base_path,label),exist_ok=True) # Creates a directory for each label if it does not already exist.
     print(f"[INIT] Posture image folders ready at {base_path}/") # Prints a message indicating that the folders are ready.
 # Save image to correct label folder 
-def save_posture_image(frame,label,base_path="posture_images"): # Defines a function that saves an image to a specific label folder.
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f") # Gets the current timestamp in a specific format.
-    filename = os.path.join(base_path,label,f"{timestamp}.jpg") # Constructs the file path using the base path, label, and timestamp.
-    cv.imwrite(filename, frame) # Saves the image to the constructed file path.
-    print(f"[LOG] Image saved to {filename}") # Prints a message indicating that the image has been saved.
+def save_posture_image(frame, label, base_path="posture_images"):
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")  # Unique to the microsecond
+    filename = os.path.join(base_path, label, f"{label}_{timestamp}.jpg")
+    cv.imwrite(filename, frame)
+    print(f"[LOG] Image saved to {filename}")
