@@ -12,7 +12,9 @@ import os
 import time
 from os.path import exists
 from urllib.request import urlretrieve
-
+from posture_image_logger import save_posture_image, initialize_folders
+# Initialize folders for image logging
+initialize_folders()
 pygame.init()
 pygame.mixer.init()
 
@@ -107,7 +109,7 @@ latest_voice_label = None  # To hold voice input while labeling mode is active
 
 
 #data logger
-def log_posture_sample(features, label, filename = "posture_dataset.csv"):
+def log_posture_sample(features, label, frame=None,filename = "posture_dataset.csv"):
     header = list(features.keys()) + ["label"]
     row = list(features.values()) + [label]
 
@@ -117,6 +119,9 @@ def log_posture_sample(features, label, filename = "posture_dataset.csv"):
         if not file_exists:
             writer.writerow(header)
         writer.writerow(row)
+    if frame is not None: # Check if frame is available
+        # Save image with label
+        save_posture_image(frame, label) # Save image to the correct label folder
 
 def update_posture_stability(confidence_score, max_score=7):
     """
@@ -652,7 +657,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     "looking_down_pct": looking_down_percentage
                 }
                 latest_features = voice_features
-                log_posture_sample(voice_features, latest_voice_label)
+                log_posture_sample(voice_features, latest_voice_label,frame=image)
                 print(f"[VOICE] Logged {latest_voice_label.upper()} posture sample via voice.")
                 last_logged_time = current_time
                 last_voice_log_time = current_time
@@ -877,15 +882,15 @@ with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_la
                 print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
             elif is_manual_labeling and key == ord('g'):
                 label = "good"
-                log_posture_sample(latest_features, label)
+                log_posture_sample(latest_features, label, frame=annotated_image)
                 print(f"[MANUAL] logged GOOD posture sample.")
             elif is_manual_labeling and key == ord('b'):
                 label = "bad"
-                log_posture_sample(latest_features, label)
+                log_posture_sample(latest_features, label, frame=annotated_image)
                 print(f"[MANUAL] logged BAD posture sample.")
             elif is_manual_labeling and key == ord('m'):
                 label = "moderate"
-                log_posture_sample(latest_features, label)
+                log_posture_sample(latest_features, label, frame=annotated_image)
                 print(f"[MANUAL] Logged MODERATE posture sample.")
             elif key == ord('c'):
                 calibration_start_time = time.time()
