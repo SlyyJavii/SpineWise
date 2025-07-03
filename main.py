@@ -5,6 +5,8 @@
 # and this code might become more and more behind as a result. Any major changes that aren't fine-tuning could just
 # batter this code in functionality.
 
+# 7/3/2025 Note: This code is NOT up-to-date. The massive overhaul took me out back and shot me. I will be taking time this weekend to fix this.
+
 import cv2 as cv
 import time
 import csv
