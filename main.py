@@ -5,13 +5,6 @@
 # and this code might become more and more behind as a result. Any major changes that aren't fine-tuning could just
 # batter this code in functionality.
 
-# NOTE AS OF 6/4/2025: Juan makes two/three big awesome things!
-# This entire branch is about progress made on Task 3: UI.
-# As of today, after making the rudimentary window, the tab functionality was made.
-# The block functionality exists *somewhat* but it only really is visible in settings.
-# As of right now, this code has a lot of placeholders.
-# BUT IT WORKS!
-
 import cv2 as cv
 import time
 import csv
@@ -28,13 +21,15 @@ from mediapipe.framework.formats import landmark_pb2
 from mediapipe.python.solutions.pose import PoseLandmark
 import sys
 from PyQt5 import QtGui
-from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout, QHBoxLayout, QTabWidget, QCheckBox, QGroupBox, QFormLayout, QSpinBox, QSlider
+from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout, QHBoxLayout, QTabWidget, QCheckBox, QGroupBox, \
+    QFormLayout, QSpinBox, QSlider, QGridLayout, QPushButton
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
 
 # Global Flag Dump. This'll be a baseline place to put settings-adjusted features/variables in.
 facelandtoggle = True
 poselandtoggle = True
+camera_active = True
 notification_volume = 50  # FOR JAKE AND EMDYA: This is the placeholder for the notification system volume. I don't know how it'll work with your own code set-ups, but adjust accordingly. Thanks! :]
 
 
@@ -348,6 +343,7 @@ class VideoThread(QThread):
     def __init__(self):
         super().__init__()
         self._run_flag = True
+        self._camera_active = True  # Internal camera state
 
         base_pose_options = python.BaseOptions(model_asset_path=pose_model)
         self.pose_options = mp.tasks.vision.PoseLandmarkerOptions(
@@ -365,57 +361,86 @@ class VideoThread(QThread):
             min_tracking_confidence=0.5
         )
 
+    def set_camera_active(self, active):
+        """Method to control camera state from main thread"""
+        self._camera_active = active
+
     def run(self):
-        cap = cv.VideoCapture(0)
+        cap = None
+
         try:
             with mp.tasks.vision.PoseLandmarker.create_from_options(self.pose_options) as pose_landmarker:
                 with mp.tasks.vision.FaceLandmarker.create_from_options(self.face_options) as face_landmarker:
-                    while self._run_flag and cap.isOpened():
-                        success, frame = cap.read()
-                        if not success:
-                            continue
+                    while self._run_flag:
+                        if self._camera_active:
+                            # Initialize camera if it's not already open
+                            if cap is None:
+                                cap = cv.VideoCapture(0)
+                                if not cap.isOpened():
+                                    print("[VIDEO] Could not open camera")
+                                    continue
 
-                        try:
-                            timestamp = int(round(time.time() * 1000))
-                            pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
-                            face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
+                            success, frame = cap.read()
+                            if not success:
+                                continue
 
-                            pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
-                            face_results = face_landmarker.detect_for_video(face_image, timestamp)
-                            annotated_image = np.copy(frame)
+                            try:
+                                timestamp = int(round(time.time() * 1000))
+                                pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
+                                face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
 
-                            # Only draw pose landmarks if the global flag is True.
-                            if pose_results.pose_landmarks and poselandtoggle:
-                                draw_landmarks(
-                                    annotated_image,
-                                    pose_results.pose_landmarks,
-                                    mp.solutions.pose.POSE_CONNECTIONS,
-                                    drawing_styles.get_default_pose_landmarks_style()
-                                )
-                                analyze_posture(annotated_image, pose_results.pose_landmarks[0])
-                            else:
-                                # Still analyze posture even if we don’t draw the skeleton.
-                                if pose_results.pose_landmarks:
+                                pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
+                                face_results = face_landmarker.detect_for_video(face_image, timestamp)
+                                annotated_image = np.copy(frame)
+
+                                # Only draw pose landmarks if the global flag is True.
+                                if pose_results.pose_landmarks and poselandtoggle:
+                                    draw_landmarks(
+                                        annotated_image,
+                                        pose_results.pose_landmarks,
+                                        mp.solutions.pose.POSE_CONNECTIONS,
+                                        drawing_styles.get_default_pose_landmarks_style()
+                                    )
                                     analyze_posture(annotated_image, pose_results.pose_landmarks[0])
+                                else:
+                                    # Still analyze posture even if we don't draw the skeleton.
+                                    if pose_results.pose_landmarks:
+                                        analyze_posture(annotated_image, pose_results.pose_landmarks[0])
 
-                            # Only draw face landmarks if the global flag is True.
-                            if face_results.face_landmarks and facelandtoggle:
-                                draw_landmarks(
-                                    annotated_image,
-                                    face_results.face_landmarks,
-                                    mp.solutions.face_mesh.FACEMESH_TESSELATION,
-                                    drawing_styles.DrawingSpec((255, 255, 255), 1, 1)
-                                )
+                                # Only draw face landmarks if the global flag is True.
+                                if face_results.face_landmarks and facelandtoggle:
+                                    draw_landmarks(
+                                        annotated_image,
+                                        face_results.face_landmarks,
+                                        mp.solutions.face_mesh.FACEMESH_TESSELATION,
+                                        drawing_styles.DrawingSpec((255, 255, 255), 1, 1)
+                                    )
 
-                            self.change_pixmap_signal.emit(annotated_image)
+                                self.change_pixmap_signal.emit(annotated_image)
 
-                        except Exception as e:
-                            print("[VIDEO] Frame‐processing error:", e)
-                            continue
+                            except Exception as e:
+                                print("[VIDEO] Frame‐processing error:", e)
+                                continue
+                        else:
+                            # Camera is disabled - release resources and emit blank frame
+                            if cap is not None:
+                                cap.release()
+                                cap = None
+
+                            # Emit a blank/black frame
+                            blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv.putText(blank_frame, "Camera Disabled", (200, 240),
+                                       cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                            self.change_pixmap_signal.emit(blank_frame)
+
+                            # Sleep a bit to prevent busy waiting
+                            time.sleep(0.1)
+
         except Exception as e:
             print("[VIDEO] Initialization error:", e)
-
-        cap.release()
+        finally:
+            if cap is not None:
+                cap.release()
 
     def stop(self):
         self._run_flag = False
@@ -429,7 +454,7 @@ class App(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SpineWise [TM] (w.i.p.)")
-        self.resize(800, 600)
+        self.resize(1000, 600)
 
         # This builds up the tab lay-out as base.
         main_layout = QVBoxLayout()
@@ -465,19 +490,64 @@ class App(QWidget):
 
         # Tab that currently holds our camera. This is going to be our dashboard later on.
     def _build_camera_tab(self):
-        camera_layout = QVBoxLayout()
+        grid = QGridLayout()
+
+        cam_group = QGroupBox("Camera Feed")
+        cam_layout = QVBoxLayout()
         self.video_label = QLabel()
-        self.video_label.setFixedSize(640, 480)  # Probably can make this resolution dynamic. Juan doesn't know how.
-        self.video_label.setStyleSheet("background-color: black;")  # Black background until first frame as placeholder. Later down the line, some dead camera icon until this starts.
+        self.video_label.setFixedSize(640, 480)
+        self.video_label.setStyleSheet("background-color: black;")
+        cam_layout.addWidget(self.video_label, alignment=Qt.AlignCenter)
+        self.toggle_btn = QPushButton("Disable Camera")
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.toggled.connect(self._toggle_camera)
+        cam_layout.addWidget(self.toggle_btn, alignment=Qt.AlignCenter)
+        cam_group.setLayout(cam_layout)
 
-        # Debug hint label so we can show this to people and they know how to operate without us saying anything.
-        hint = QLabel("'c' to calibrate, 'ESC' to quit program. These are also audio commands: 'calibrate' and 'exit' respectively!")
+        status_group = QGroupBox("Session Status")
+        status_layout = QVBoxLayout()
+        self.timer_label = QLabel("Session Time: 00:00:00")
+        status_layout.addWidget(self.timer_label)
+        self.camera_status = QLabel("Camera Active: Yes")
+        status_layout.addWidget(self.camera_status)
+        status_group.setLayout(status_layout)
 
-        camera_layout.addWidget(self.video_label, alignment=Qt.AlignCenter)
-        camera_layout.addWidget(hint, alignment=Qt.AlignCenter)
-        self.camera_tab.setLayout(camera_layout)
+        grid.addWidget(cam_group, 0, 0)
+        grid.addWidget(status_group, 0, 1)
+        self.camera_tab.setLayout(grid)
+
+        from PyQt5.QtCore import QTimer
+        self.session_start = time.time()
+        self.qtimer = QTimer()
+        self.qtimer.timeout.connect(self._update_timer)
+        self.qtimer.start(1000)
+
+    def _update_timer(self):
+        elapsed = int(time.time() - self.session_start)
+        h, rem = divmod(elapsed, 3600)
+        m, s = divmod(rem, 60)
+        self.timer_label.setText(f"Session Time: {h:02d}:{m:02d}:{s:02d}")
+
+    def _toggle_camera(self, checked):
+        global camera_active
+        camera_active = not checked
+
+        # Update the video thread's camera state
+        self.thread.set_camera_active(camera_active)
+
+        # Update UI elements
+        self.camera_status.setText(f"Camera Active: {'Yes' if camera_active else 'No'}")
+        self.toggle_btn.setText('Enable Camera' if checked else 'Disable Camera')
+
+        print(f"[DEBUG] Camera toggled: {'OFF' if checked else 'ON'}")
+
+    def update_camera_view(self, image):
+        qt_img = QtGui.QImage(image.data, image.shape[1], image.shape[0], QtGui.QImage.Format_RGB888).rgbSwapped()
+        self.video_label.setPixmap(QPixmap.fromImage(qt_img))
 
     # Placeholder analytics tab. See Emdya's Design 2 mock-up that had some pretty good ideas for the analytics tab.
+    # Real time posture plot. Holy shit this actually sucks. None of this looks particularly good or works particularly well.
+    # This is the one part of the code I hate. Hate hate hate. If this doesn't look updated, I most likely reverted all of this to base placeholder.
     def _build_analytics_tab(self):
         analytics_layout = QVBoxLayout()
         placeholder = QLabel("analytics'll be here soon (maybe)")
