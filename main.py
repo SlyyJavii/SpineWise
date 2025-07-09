@@ -101,34 +101,35 @@ def listen_for_speech():
     try:
         recognizer = sr.Recognizer()
         mic = sr.Microphone()
-        with mic as source:
-            recognizer.adjust_for_ambient_noise(source)
-            print("[SpeechRecognition] Listening...")
-            while True:
-                try:
-                    print("[DEBUG] Waiting for audio...")
-                    audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
-                    print("[DEBUG] Audio captured")
-                    command = recognizer.recognize_google(audio).lower().strip()
-                    print(f"[SpeechRecognition] Heard: {command}")
-                    if "calibrate" in command:
-                        calibration_start_time = time.time()
-                        is_calibrating = True
-                        calibration_data = {k: [] for k in calibration_data}
-                        print("Calibration countdown started. Get ready...")
-                    elif "exit" in command:
-                        print("[SpeechRecognition] Escape command received. Exiting program...")
-                        import os
-                        os._exit(0)
-                except sr.WaitTimeoutError:
-                    continue
-                except sr.UnknownValueError:
-                    continue
-                except sr.RequestError:
-                    print("[SpeechRecognition] API unavailable")
-                    break
-    except Exception as e:
-        print("[ERROR] Microphone failed:", e)
+    except sr.UnknownValueError:
+        return
+    with mic as source:
+        recognizer.adjust_for_ambient_noise(source)
+        print("[SpeechRecognition] Listening...")
+        while True:
+            print("[DEBUG] Waiting for audio...")
+            try:
+                audio = recognizer.listen(source, timeout=2, phrase_time_limit=3)
+                command = recognizer.recognize_google(audio).lower().strip()
+            except sr.UnknownValueError:
+                continue
+            except sr.WaitTimeoutError:
+                continue
+            except sr.RequestError as e:
+                print(f"[SpeechRecognition] Could not request results from Google Speech Recognition service; {e}")
+                continue
+
+            print("[DEBUG] Audio captured")
+            print(f"[SpeechRecognition] Heard: {command}")
+            if "calibrate" in command:
+                calibration_start_time = time.time()
+                is_calibrating = True
+                calibration_data = {k: [] for k in calibration_data}
+                print("Calibration countdown started. Get ready...")
+            elif "exit" in command:
+                print("[SpeechRecognition] Escape command received. Exiting program...")
+                import os
+                os._exit(0)
 
 
 print("[Thread] Starting voice command thread...")
@@ -377,7 +378,10 @@ class VideoThread(QThread):
                         if self._camera_active:
                             # Initialize camera if it's not already open
                             if cap is None:
-                                cap = cv.VideoCapture(0)
+                                if sys.platform == "win32":
+                                    cap = cv.VideoCapture(0, cv.CAP_DSHOW)
+                                else:
+                                    cap = cv.VideoCapture(0)
                                 if not cap.isOpened():
                                     print("[VIDEO] Could not open camera")
                                     continue
