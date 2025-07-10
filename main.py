@@ -26,7 +26,8 @@ from PyQt5 import QtGui
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout, QHBoxLayout, QTabWidget, QCheckBox, QGroupBox, \
     QFormLayout, QSpinBox, QSlider, QGridLayout, QPushButton
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
+from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread, QMutex, QWaitCondition
+from queue import Queue
 
 # Global Flag Dump. This'll be a baseline place to put settings-adjusted features/variables in.
 facelandtoggle = True
@@ -347,6 +348,9 @@ class VideoThread(QThread):
         super().__init__()
         self._run_flag = True
         self._camera_active = True  # Internal camera state
+        self.queue = Queue()
+        self.mutex = QMutex()
+        self.wait_condition = QWaitCondition()
 
         base_pose_options = python.BaseOptions(model_asset_path=pose_model)
         self.pose_options = mp.tasks.vision.PoseLandmarkerOptions(
@@ -364,83 +368,95 @@ class VideoThread(QThread):
             min_tracking_confidence=0.5
         )
 
+    def start_frame_processing(self):
+        with mp.tasks.vision.PoseLandmarker.create_from_options(self.pose_options) as pose_landmarker:
+            with mp.tasks.vision.FaceLandmarker.create_from_options(self.face_options) as face_landmarker:
+                while self._run_flag:
+                    try:
+                        frame = self.queue.get()
+
+                        if not self._camera_active:
+                            continue
+
+                        timestamp = int(round(time.time() * 1000))
+                        pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
+                        face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
+
+                        pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
+                        face_results = face_landmarker.detect_for_video(face_image, timestamp)
+                        annotated_image = np.copy(frame)
+
+                        # Only draw pose landmarks if the global flag is True.
+                        if pose_results.pose_landmarks and poselandtoggle:
+                            draw_landmarks(
+                                annotated_image,
+                                pose_results.pose_landmarks,
+                                mp.solutions.pose.POSE_CONNECTIONS,
+                                drawing_styles.get_default_pose_landmarks_style()
+                            )
+                            analyze_posture(annotated_image, pose_results.pose_landmarks[0])
+                        else:
+                            # Still analyze posture even if we don't draw the skeleton.
+                            if pose_results.pose_landmarks:
+                                analyze_posture(annotated_image, pose_results.pose_landmarks[0])
+
+                        # Only draw face landmarks if the global flag is True.
+                        if face_results.face_landmarks and facelandtoggle:
+                            draw_landmarks(
+                                annotated_image,
+                                face_results.face_landmarks,
+                                mp.solutions.face_mesh.FACEMESH_TESSELATION,
+                                drawing_styles.DrawingSpec((255, 255, 255), 1, 1)
+                            )
+
+                        self.change_pixmap_signal.emit(annotated_image)
+
+                    except Exception as e:
+                        print("[VIDEO] Frame‐processing error:", e)
+
+    def get_wait_condition(self):
+        return self.wait_condition
+
     def set_camera_active(self, active):
         """Method to control camera state from main thread"""
         self._camera_active = active
 
     def run(self):
         cap = None
+        threading.Thread(target=self.start_frame_processing).start()
 
         try:
-            with mp.tasks.vision.PoseLandmarker.create_from_options(self.pose_options) as pose_landmarker:
-                with mp.tasks.vision.FaceLandmarker.create_from_options(self.face_options) as face_landmarker:
-                    while self._run_flag:
-                        if self._camera_active:
-                            # Initialize camera if it's not already open
-                            if cap is None:
-                                if sys.platform == "win32":
-                                    cap = cv.VideoCapture(0, cv.CAP_DSHOW)
-                                else:
-                                    cap = cv.VideoCapture(0)
-                                if not cap.isOpened():
-                                    print("[VIDEO] Could not open camera")
-                                    continue
-
-                            success, frame = cap.read()
-                            if not success:
-                                continue
-
-                            try:
-                                timestamp = int(round(time.time() * 1000))
-                                pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
-                                face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.array(frame))
-
-                                pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
-                                face_results = face_landmarker.detect_for_video(face_image, timestamp)
-                                annotated_image = np.copy(frame)
-
-                                # Only draw pose landmarks if the global flag is True.
-                                if pose_results.pose_landmarks and poselandtoggle:
-                                    draw_landmarks(
-                                        annotated_image,
-                                        pose_results.pose_landmarks,
-                                        mp.solutions.pose.POSE_CONNECTIONS,
-                                        drawing_styles.get_default_pose_landmarks_style()
-                                    )
-                                    analyze_posture(annotated_image, pose_results.pose_landmarks[0])
-                                else:
-                                    # Still analyze posture even if we don't draw the skeleton.
-                                    if pose_results.pose_landmarks:
-                                        analyze_posture(annotated_image, pose_results.pose_landmarks[0])
-
-                                # Only draw face landmarks if the global flag is True.
-                                if face_results.face_landmarks and facelandtoggle:
-                                    draw_landmarks(
-                                        annotated_image,
-                                        face_results.face_landmarks,
-                                        mp.solutions.face_mesh.FACEMESH_TESSELATION,
-                                        drawing_styles.DrawingSpec((255, 255, 255), 1, 1)
-                                    )
-
-                                self.change_pixmap_signal.emit(annotated_image)
-
-                            except Exception as e:
-                                print("[VIDEO] Frame‐processing error:", e)
-                                continue
+            while self._run_flag:
+                if self._camera_active:
+                    # Initialize camera if it's not already open
+                    if cap is None:
+                        if sys.platform == "win32":
+                            cap = cv.VideoCapture(0, cv.CAP_DSHOW)
                         else:
-                            # Camera is disabled - release resources and emit blank frame
-                            if cap is not None:
-                                cap.release()
-                                cap = None
+                            cap = cv.VideoCapture(0)
+                        if not cap.isOpened():
+                            print("[VIDEO] Could not open camera")
+                            continue
+                    success, frame = cap.read()
+                    if not success:
+                        continue
 
-                            # Emit a blank/black frame
-                            blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                            cv.putText(blank_frame, "Camera Disabled", (200, 240),
-                                       cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                            self.change_pixmap_signal.emit(blank_frame)
+                    self.queue.put(frame)
 
-                            # Sleep a bit to prevent busy waiting
-                            time.sleep(0.1)
+                else:
+                    # Camera is disabled - release resources and emit blank frame
+                    if cap is not None:
+                        cap.release()
+                        cap = None
+
+                    # Emit a blank/black frame
+                    blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv.putText(blank_frame, "Camera Disabled", (200, 240),
+                               cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    self.change_pixmap_signal.emit(blank_frame)
+                    self.mutex.lock()
+                    self.wait_condition.wait(self.mutex)
+                    self.mutex.unlock()
 
         except Exception as e:
             print("[VIDEO] Initialization error:", e)
@@ -537,6 +553,9 @@ class App(QWidget):
     def _toggle_camera(self, checked):
         global camera_active
         camera_active = not checked
+
+        if camera_active:
+            self.thread.get_wait_condition().wakeOne()
 
         # Update the video thread's camera state
         self.thread.set_camera_active(camera_active)
