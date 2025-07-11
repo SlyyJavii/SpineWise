@@ -39,9 +39,11 @@ if not exists(face_model):
     face_model = urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task", "face_landmarker.task")[0]
 
 last_log_time = time.time()
-log_file = open("posture_trend_log.csv", mode='w', newline='')
-csv_writer = csv.writer(log_file)
-csv_writer.writerow(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
+
+# Remove the global file opening - let individual functions handle this
+# log_file = open("posture_trend_log.csv", mode='w', newline='')
+# csv_writer = csv.writer(log_file)
+# csv_writer.writerow(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
 
 is_calibrating = False
 calibration_data = {
@@ -108,6 +110,25 @@ last_logged_time = 0 #for rate limiting dataset logging
 is_manual_labeling = False #start in auto mode by default
 latest_voice_label = None  # To hold voice input while labeling mode is active
 
+# Add function to create pose landmarker
+def get_pose_landmarker():
+    base_pose_options = python.BaseOptions(model_asset_path=pose_model)
+    pose_options = mp.tasks.vision.PoseLandmarkerOptions(
+        base_options=base_pose_options,
+        running_mode=mp.tasks.vision.RunningMode.VIDEO,
+        min_pose_detection_confidence=0.7,
+        min_tracking_confidence=0.7)
+    return mp.tasks.vision.PoseLandmarker.create_from_options(pose_options)
+
+# Add function to create face landmarker
+def get_face_landmarker():
+    base_face_options = python.BaseOptions(model_asset_path=face_model)
+    face_options = mp.tasks.vision.FaceLandmarkerOptions(
+        base_options=base_face_options,
+        running_mode=mp.tasks.vision.RunningMode.VIDEO,
+        min_face_detection_confidence=0.5,
+        min_tracking_confidence=0.5)
+    return mp.tasks.vision.FaceLandmarker.create_from_options(face_options)
 
 #data logger
 def log_posture_sample(features, label, frame=None,filename = "posture_dataset.csv"):
@@ -123,6 +144,15 @@ def log_posture_sample(features, label, frame=None,filename = "posture_dataset.c
     if frame is not None: # Check if frame is available
         # Save image with label
         save_posture_image(frame, label) # Save image to the correct label folder
+
+def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confidence_score):
+    """Log posture data to the trend log file"""
+    file_exists = os.path.exists("posture_trend_log.csv")
+    with open("posture_trend_log.csv", mode='a', newline='') as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
+        writer.writerow([timestamp, mode, facing, posture_status, head_tilt, confidence_score])
 
 def update_posture_stability(confidence_score, max_score=7):
     """
@@ -315,9 +345,6 @@ def listen_for_speech():
     except Exception as e:
         print("[ERROR] Microphone failed:", e)
 
-print("[Thread] Starting voice command thread...")
-threading.Thread(target=listen_for_speech, daemon=True).start()
-
 def calculate_angle(v1, v2):
     dot = v1[0] * v2[0] + v1[1] * v2[1]
     mag1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
@@ -336,7 +363,12 @@ def normalize_lighting(frame):
     merged = cv.merge((cl, a, b))
     return cv.cvtColor(merged, cv.COLOR_LAB2BGR)
 
-def draw_landmarks(frame, landmarks_list, connections, landmark_style):
+def draw_landmarks(frame, landmarks_list, connections=None, landmark_style=None):
+    if connections is None:
+        connections = mp.solutions.pose.POSE_CONNECTIONS
+    if landmark_style is None:
+        landmark_style = drawing_styles.get_default_pose_landmarks_style()
+        
     for i in range(len(landmarks_list)):
         landmarks = landmarks_list[i]
         landmarks_proto = landmark_pb2.NormalizedLandmarkList()
@@ -348,6 +380,7 @@ def draw_landmarks(frame, landmarks_list, connections, landmark_style):
             landmarks_proto,
             connections,
             landmark_style)
+    return frame
 
 def scale_metric(value, low_threshold, high_threshold, max_score=3):
     """
@@ -389,7 +422,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     left_shoulder = pose_landmarks[PoseLandmark.LEFT_SHOULDER]
     right_shoulder = pose_landmarks[PoseLandmark.RIGHT_SHOULDER]
     if left_shoulder.visibility < 0.5 or right_shoulder.visibility < 0.5:
-        return
+        return status
         
     left_hip = pose_landmarks[PoseLandmark.LEFT_HIP]
     right_hip = pose_landmarks[PoseLandmark.RIGHT_HIP]
@@ -419,7 +452,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                            visibility=1.0)
 
     hip = type(mouth)(x=(left_hip.x + right_hip.x) / 2,
-                      y=(left_hip.y + right_hip.y) / 2,
+                      y=(left_hip.y + right_hip.z) / 2,
                       z=(left_hip.z + right_hip.z) / 2,
                       visibility=1.0)
 
@@ -640,6 +673,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     "looking_down_pct": looking_down_percentage
                 }
                 #global latest_features
+                global latest_features
                 latest_features = features
                 log_posture_sample(features, stable_posture)
                 print(f"[LOG] logged posture sample: {stable_posture}")
@@ -724,209 +758,181 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             status = display_status
             color = posture_status_labels[stable_posture][1]
 
-    # DEBUG: Visual face mesh overlay (optional - remove in production)
-    debug_face = getattr(globals().get('builtins', {}), 'debug_face', False)  # Get global debug state
-    if debug_face and face_landmarks and len(face_landmarks) > 0:
-        print(f"[DEBUG] Drawing Face Mesh overlay, landmarks count: {len(face_landmarks[0])}")
-        # Draw key Face Mesh landmarks
-        h, w = image.shape[:2]
-        landmarks = face_landmarks[0]
-        
+    # Log to trend file
+    if calibrated_thresholds:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        facing = side_label if mode == "side" else "front"
+        head_tilt = normalized_head_tilt if 'normalized_head_tilt' in locals() else 0
+        confidence = combined_confidence if 'combined_confidence' in locals() else side_confidence_score if 'side_confidence_score' in locals() else 0
+        log_to_trend_file(timestamp, mode, facing, status, head_tilt, confidence)
+
+    # Return status for GUI
+    return status
+
+# Move the main execution code into a separate function
+def run_standalone():
+    """Run the standalone version with OpenCV window"""
+    
+    # Define and start speech recognition thread only in standalone mode
+    def listen_for_speech():
+        global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
+        global latest_voice_label, is_manual_labeling
         try:
-            # Draw eye centers
-            left_eye = landmarks[FACE_LANDMARKS["left_eye_center"]]
-            right_eye = landmarks[FACE_LANDMARKS["right_eye_center"]]
-            cv.circle(image, (int(left_eye.x * w), int(left_eye.y * h)), 5, (255, 0, 0), -1)  # Blue left eye
-            cv.circle(image, (int(right_eye.x * w), int(right_eye.y * h)), 5, (0, 255, 0), -1)  # Green right eye
-            
-            # Draw nose tip and bridge
-            nose_tip = landmarks[FACE_LANDMARKS["nose_tip"]]
-            nose_bridge = landmarks[FACE_LANDMARKS["nose_bridge"]]
-            cv.circle(image, (int(nose_tip.x * w), int(nose_tip.y * h)), 5, (0, 0, 255), -1)    # Red nose tip
-            cv.circle(image, (int(nose_bridge.x * w), int(nose_bridge.y * h)), 5, (255, 255, 0), -1)  # Yellow bridge
-            
-            # Draw cheek landmarks (now used as ear replacements)
-            left_cheek_landmark = landmarks[FACE_LANDMARKS["left_cheek"]]
-            right_cheek_landmark = landmarks[FACE_LANDMARKS["right_cheek"]]
-            cv.circle(image, (int(left_cheek_landmark.x * w), int(left_cheek_landmark.y * h)), 4, (0, 255, 255), -1)  # Cyan cheeks
-            cv.circle(image, (int(right_cheek_landmark.x * w), int(right_cheek_landmark.y * h)), 4, (0, 255, 255), -1)
-            
-            # Show Face Mesh metrics
-            cv.putText(image, f"Face Tilt: {face_tilt:.4f}", (w//2 - 80, 30), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv.putText(image, f"Face Rotation: {face_rotation:.4f}", (w//2 - 80, 50), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv.putText(image, f"Face Lean: {face_lean:.4f}", (w//2 - 80, 70), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv.putText(image, f"Looking Down: {nose_eye_distance:.4f}", (w//2 - 80, 90), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv.putText(image, f"Head Tilt (Cheeks): {raw_head_tilt:.4f}", (w//2 - 80, 110), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            print(f"[DEBUG] Face metrics - Tilt: {face_tilt:.4f}, Rotation: {face_rotation:.4f}, Lean: {face_lean:.4f}, Looking Down: {nose_eye_distance:.4f}, Head Tilt (Cheeks): {raw_head_tilt:.4f}")
+            recognizer = sr.Recognizer()
+            mic = sr.Microphone()
+            with mic as source:
+                recognizer.adjust_for_ambient_noise(source)
+                print("[SpeechRecognition] Listening...")
+                while True:
+                    try:
+                        print("[DEBUG] Waiting for audio...")
+                        audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                        print("[DEBUG] Audio captured")
+                        command = recognizer.recognize_google(audio).lower().strip()
+                        print(f"[SpeechRecognition] Heard: {command}")
+                        if "calibrate" in command:
+                            calibration_start_time = time.time()
+                            is_calibrating = True
+                            calibration_data = {k: [] for k in calibration_data}
+                            print("Calibration countdown started. Get ready...")
+                        elif "exit" in command:
+                            print("[SpeechRecognition] Escape command received. Exiting program...")
+                            import os
+                            os._exit(0)
+
+                        elif is_manual_labeling:
+                            if "good" in command:
+                                latest_voice_label = "good"
+                            elif "bad" in command:
+                                latest_voice_label = "bad"
+                            elif "moderate" in command:
+                                latest_voice_label = "moderate"
+
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        continue
+                    except sr.RequestError:
+                        print("[SpeechRecognition] API unavailable")
+                        break
         except Exception as e:
-            print(f"[DEBUG] Error drawing face mesh overlay: {e}")
-    elif debug_face:
-        print("[DEBUG] Face Mesh debug enabled but no landmarks available")
+            print("[ERROR] Microphone failed:", e)
 
-    # DEBUG: Visual cheek position overlay (replaces ear overlay since we're using cheeks as ears)
-    debug_cheeks = False  # Set to True to see cheek landmark positions
-    if debug_cheeks and calibrated_thresholds and left_cheek is not None and right_cheek is not None:
-        # Draw horizontal lines at cheek positions (now used as ear replacements)
-        h, w = image.shape[:2]
-        left_cheek_pixel_y = int(left_cheek.y * h)
-        right_cheek_pixel_y = int(right_cheek.y * h)
-        
-        cv.line(image, (0, left_cheek_pixel_y), (w//3, left_cheek_pixel_y), (255, 0, 0), 2)  # Blue line for left cheek
-        cv.line(image, (2*w//3, right_cheek_pixel_y), (w, right_cheek_pixel_y), (0, 255, 0), 2)  # Green line for right cheek
-        
-        # Show tilt values
-        cv.putText(image, f"LC: {left_cheek.y:.3f}", (10, left_cheek_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-        cv.putText(image, f"RC: {right_cheek.y:.3f}", (2*w//3 + 10, right_cheek_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv.putText(image, f"Cheek Tilt: {raw_head_tilt:.4f}", (w//2 - 60, 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-    elif debug_cheeks and calibrated_thresholds:
-        # Fallback debug for pose ears if Face Mesh cheeks not available
-        h, w = image.shape[:2]
-        left_ear_pixel_y = int(left_ear.y * h)
-        right_ear_pixel_y = int(right_ear.y * h)
-        
-        cv.line(image, (0, left_ear_pixel_y), (w//3, left_ear_pixel_y), (255, 0, 0), 2)  # Blue line for left ear
-        cv.line(image, (2*w//3, right_ear_pixel_y), (w, right_ear_pixel_y), (0, 255, 0), 2)  # Green line for right ear
-        
-        # Show tilt values
-        cv.putText(image, f"LE: {left_ear.y:.3f}", (10, left_ear_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-        cv.putText(image, f"RE: {right_ear.y:.3f}", (2*w//3 + 10, right_ear_pixel_y - 10), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv.putText(image, f"Pose Tilt: {raw_head_tilt:.4f}", (w//2 - 60, 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+    # ONLY start speech recognition if we're in standalone mode
+    print("[STANDALONE] Starting voice command thread for standalone mode only...")
+    threading.Thread(target=listen_for_speech, daemon=True).start()
 
-    # Display information
-    average_color = image[30:310, 175:220].mean((0, 1))
-    final_color = ((255 - average_color[0]), (255 - average_color[1]), (255 - average_color[2]))
+    # Initialize MediaPipe models and camera
+    base_pose_options = python.BaseOptions(model_asset_path=pose_model)
+    pose_options = mp.tasks.vision.PoseLandmarkerOptions(
+        base_options=base_pose_options,
+        running_mode=mp.tasks.vision.RunningMode.VIDEO,
+        min_pose_detection_confidence=0.7,
+        min_tracking_confidence=0.7)
 
-    cv.putText(image, f"Mode: {mode}", (30, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (final_color[0], 220, final_color[2]), 2)
+    base_face_options = python.BaseOptions(model_asset_path=face_model)
+    face_options = mp.tasks.vision.FaceLandmarkerOptions(
+        base_options=base_face_options,
+        running_mode=mp.tasks.vision.RunningMode.VIDEO,
+        min_face_detection_confidence=0.5,  # Lowered from 0.7 for better detection
+        min_tracking_confidence=0.5)        # Lowered from 0.7 for better detection
 
-    # Only show confidence bars if calibration is complete
-    if calibrated_thresholds and not is_calibrating:
-        if mode == "side":
-            cv.putText(image, side_label, (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7, (180, 220, 255), 2)
-            cv.rectangle(image, (30, 180), (30 + min(side_confidence_score * 25, 175), 200),
-                         (0, max(255 - side_confidence_score * 30, 50), 50), -1)
-            cv.putText(image, f"Forward Head: {side_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                       final_color, 1)
-        else:
-            # Front view confidence bars
-            cv.rectangle(image, (30, 180), (30 + min(head_confidence_score * 25, 175), 200),
-                         (0, max(255 - head_confidence_score * 30, 50), 50), -1)
-            cv.putText(image, f"Head Issues: {head_confidence_score}/7", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                       final_color, 1)
-            cv.rectangle(image, (30, 225), (30 + min(body_confidence_score * 25, 175), 245),
-                         (0, max(255 - body_confidence_score * 30, 50), 50), -1)
-            cv.putText(image, f"Body Issues: {body_confidence_score}/7", (30, 220), cv.FONT_HERSHEY_SIMPLEX, 0.6,
-                       final_color, 1)
+    cap = cv.VideoCapture(0)
+    cv.namedWindow('Posture Detection')
 
-    # Display simplified status with score
-    if calibrated_thresholds and not is_calibrating:
-        if mode == "front":
-            # Show both raw confidence and smoothed confidence
-            raw_conf_text = f"Raw: {combined_confidence}/7"
-            smooth_conf_text = f"Smooth: {smoothed_confidence:.1f}/7"
-            status_text = f"{status} | {raw_conf_text} | {smooth_conf_text}"
-        else:
-            status_text = f"{status} (Score: {side_confidence_score}/7)"
-    else:
-        status_text = status
-        
-    cv.putText(image, status_text, (30, 90), cv.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_landmarker:
+        with mp.tasks.vision.FaceLandmarker.create_from_options(face_options) as face_landmarker:
+            while cap.isOpened():
+                success, frame = cap.read()
+                if not success:
+                    continue
 
-# Initialize MediaPipe models and camera
-base_pose_options = python.BaseOptions(model_asset_path=pose_model)
-pose_options = mp.tasks.vision.PoseLandmarkerOptions(
-    base_options=base_pose_options,
-    running_mode=mp.tasks.vision.RunningMode.VIDEO,
-    min_pose_detection_confidence=0.7,
-    min_tracking_confidence=0.7)
+                # FIXED: Convert BGR to RGB for MediaPipe
+                frame_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+                timestamp = int(round(time.time() * 1000))
+                pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-base_face_options = python.BaseOptions(model_asset_path=face_model)
-face_options = mp.tasks.vision.FaceLandmarkerOptions(
-    base_options=base_face_options,
-    running_mode=mp.tasks.vision.RunningMode.VIDEO,
-    min_face_detection_confidence=0.5,  # Lowered from 0.7 for better detection
-    min_tracking_confidence=0.5)        # Lowered from 0.7 for better detection
+                pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
+                face_results = face_landmarker.detect_for_video(face_image, timestamp)
+                annotated_image = np.copy(frame)
 
-cap = cv.VideoCapture(0)
-cv.namedWindow('Posture Detection')
+                draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
 
-with mp.tasks.vision.PoseLandmarker.create_from_options(pose_options) as pose_landmarker:
-    with mp.tasks.vision.FaceLandmarker.create_from_options(face_options) as face_landmarker:
-        while cap.isOpened():
-            success, frame = cap.read()
-            if not success:
-                continue
+                if pose_results.pose_landmarks:
+                    analyze_posture(annotated_image, pose_results.pose_landmarks[0], face_results.face_landmarks)
 
-            # FIXED: Convert BGR to RGB for MediaPipe
-            frame_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-            timestamp = int(round(time.time() * 1000))
-            pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-            face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                cv.imshow('Posture Detection', annotated_image)
 
-            pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
-            face_results = face_landmarker.detect_for_video(face_image, timestamp)
-            annotated_image = np.copy(frame)
+                key = cv.waitKey(5) & 0xFF
+                if key == 27:
+                    break
+                #keys for the manual data logging
+                elif key == ord('l'):
+                    is_manual_labeling = not is_manual_labeling
+                    print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
+                elif is_manual_labeling and key == ord('g'):
+                    label = "good"
+                    if 'latest_features' in globals():
+                        log_posture_sample(latest_features, label, frame=annotated_image)
+                        print(f"[MANUAL] logged GOOD posture sample.")
+                elif is_manual_labeling and key == ord('b'):
+                    label = "bad"
+                    if 'latest_features' in globals():
+                        log_posture_sample(latest_features, label, frame=annotated_image)
+                        print(f"[MANUAL] logged BAD posture sample.")
+                elif is_manual_labeling and key == ord('m'):
+                    label = "moderate"
+                    if 'latest_features' in globals():
+                        log_posture_sample(latest_features, label, frame=annotated_image)
+                        print(f"[MANUAL] Logged MODERATE posture sample.")
+                elif key == ord('c'):
+                    calibration_start_time = time.time()
+                    is_calibrating = True
+                    calibration_data = {k: [] for k in calibration_data}
+                elif key == ord('f'):
+                    # Toggle debug face mesh visualization
+                    import builtins
+                    if hasattr(builtins, 'debug_face'):
+                        builtins.debug_face = not builtins.debug_face
+                    else:
+                        builtins.debug_face = True
+                    print(f"[DEBUG] Face Mesh visualization: {'ON' if builtins.debug_face else 'OFF'}")
+                elif key == ord('d'):
+                    # Toggle debug cheek visualization (replaces ear debug since we use cheeks as ears)
+                    import builtins
+                    if hasattr(builtins, 'debug_cheeks'):
+                        builtins.debug_cheeks = not builtins.debug_cheeks
+                    else:
+                        builtins.debug_cheeks = True
+                    print(f"[DEBUG] Cheek visualization: {'ON' if builtins.debug_cheeks else 'OFF'}")
+                elif key == ord('i'):
+                    # Print current detection info
+                    print(f"[INFO] Face detected: {bool(face_results.face_landmarks)}")
+                    print(f"[INFO] Pose detected: {bool(pose_results.pose_landmarks)}")
+                    if face_results.face_landmarks:
+                        print(f"[INFO] Face landmarks count: {len(face_results.face_landmarks[0])}")
+                    print(f"[INFO] Face debug mode: {getattr(builtins, 'debug_face', False)}")
+                    print(f"[INFO] Calibrated: {bool(calibrated_thresholds)}")
+                    print(f"[INFO] Current stable posture: {current_stable_posture}")
+                    print(f"[INFO] Smoothed confidence: {smoothed_confidence:.2f}")
 
-            draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
+    cap.release()
+    cv.destroyAllWindows()
 
-            if pose_results.pose_landmarks:
-                analyze_posture(annotated_image, pose_results.pose_landmarks[0], face_results.face_landmarks)
+# Add a flag to prevent any background speech recognition in GUI mode
+_gui_mode = False
 
-            cv.imshow('Posture Detection', annotated_image)
+def set_gui_mode(enabled=True):
+    """Set whether we're running in GUI mode to prevent conflicts"""
+    global _gui_mode
+    _gui_mode = enabled
+    print(f"[BACKEND] GUI mode: {enabled}")
 
-            key = cv.waitKey(5) & 0xFF
-            if key == 27:
-                break
-            #keys for the manual data logging
-            elif key == ord('l'):
-                is_manual_labeling = not is_manual_labeling
-                print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
-            elif is_manual_labeling and key == ord('g'):
-                label = "good"
-                log_posture_sample(latest_features, label, frame=annotated_image)
-                print(f"[MANUAL] logged GOOD posture sample.")
-            elif is_manual_labeling and key == ord('b'):
-                label = "bad"
-                log_posture_sample(latest_features, label, frame=annotated_image)
-                print(f"[MANUAL] logged BAD posture sample.")
-            elif is_manual_labeling and key == ord('m'):
-                label = "moderate"
-                log_posture_sample(latest_features, label, frame=annotated_image)
-                print(f"[MANUAL] Logged MODERATE posture sample.")
-            elif key == ord('c'):
-                calibration_start_time = time.time()
-                is_calibrating = True
-                calibration_data = {k: [] for k in calibration_data}
-            elif key == ord('f'):
-                # Toggle debug face mesh visualization
-                import builtins
-                if hasattr(builtins, 'debug_face'):
-                    builtins.debug_face = not builtins.debug_face
-                else:
-                    builtins.debug_face = True
-                print(f"[DEBUG] Face Mesh visualization: {'ON' if builtins.debug_face else 'OFF'}")
-            elif key == ord('d'):
-                # Toggle debug cheek visualization (replaces ear debug since we use cheeks as ears)
-                import builtins
-                if hasattr(builtins, 'debug_cheeks'):
-                    builtins.debug_cheeks = not builtins.debug_cheeks
-                else:
-                    builtins.debug_cheeks = True
-                print(f"[DEBUG] Cheek visualization: {'ON' if builtins.debug_cheeks else 'OFF'}")
-            elif key == ord('i'):
-                # Print current detection info
-                print(f"[INFO] Face detected: {bool(face_results.face_landmarks)}")
-                print(f"[INFO] Pose detected: {bool(pose_results.pose_landmarks)}")
-                if face_results.face_landmarks:
-                    print(f"[INFO] Face landmarks count: {len(face_results.face_landmarks[0])}")
-                print(f"[INFO] Face debug mode: {getattr(builtins, 'debug_face', False)}")
-                print(f"[INFO] Calibrated: {bool(calibrated_thresholds)}")
-                print(f"[INFO] Current stable posture: {current_stable_posture}")
-                print(f"[INFO] Smoothed confidence: {smoothed_confidence:.2f}")
+def is_gui_mode():
+    """Check if we're in GUI mode"""
+    return _gui_mode
 
-                #Code for audio recognition for manual data logging
-
-
-cap.release()
-cv.destroyAllWindows()
-log_file.close()
+# Only run standalone if this file is executed directly
+if __name__ == "__main__":
+    run_standalone()

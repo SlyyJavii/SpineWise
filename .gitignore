@@ -1,0 +1,27 @@
+# Ignore model files
+face_landmarker.task
+pose_landmarker_full.task
+
+# Ignore logs and CSVs
+posture_trend_log.csv
+
+# Ignore compiled files and caches
+__pycache__/
+*.pyc
+
+
+
+# Ignore IDE and editor configs
+.idea/
+
+
+# Ignore environment files (if env is inside the repo)
+opencv-env/
+.env/
+.venv/
+env/
+venv/
+
+# System files
+.DS_Store
+Thumbs.db
