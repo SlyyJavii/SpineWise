@@ -1,6 +1,8 @@
 # Enhanced spinewise_gui.py with speech recognition integration
 
 import os
+import queue
+
 import cv2
 import time
 import numpy as np
@@ -152,77 +154,91 @@ class VideoThread(QThread):
         self._run_flag = True  # Make sure this is always True when created
         self.pose_landmarker = None
         self.face_landmarker = None
+        self.raw_queue = None
+        self.processed_queue = None
         print("[VIDEO] VideoThread initialized with _run_flag = True")
+
+    def process_image_queue(self):
+        with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
+            while self._run_flag:
+                frame = self.raw_queue.get()
+
+                frame = normalize_lighting(frame)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Create MediaPipe image objects
+                timestamp = int(round(time.time() * 1000))
+                pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+
+                # Get results
+                pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
+                face_results = face_landmarker.detect_for_video(face_image, timestamp)
+
+                # Create a copy for annotation
+                annotated_image = np.copy(frame)
+
+                if pose_results.pose_landmarks:
+                    # Don't draw landmarks - keep clean video feed for GUI
+                    # draw_landmarks(annotated_image, pose_results.pose_landmarks)
+
+                    # Analyze posture (this still works without drawing landmarks)
+                    result = analyze_posture(
+                        annotated_image,
+                        pose_results.pose_landmarks[0],
+                        face_results.face_landmarks if face_results.face_landmarks else None
+                    )
+                    self.update_stats_signal.emit(result)
+                else:
+                    self.update_stats_signal.emit("No pose detected")
+
+                # Convert to RGB for Qt (now shows clean video without landmarks)
+                rgb_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                #self.change_pixmap_signal.emit(qt_image)
+                self.processed_queue.put(qt_image)
 
     def run(self):
         print(f"[INFO] VideoThread started with _run_flag = {self._run_flag}")
-        
+
         # Create landmarkers
         self.pose_landmarker = get_pose_landmarker()
         self.face_landmarker = get_face_landmarker()
-        
+        self.raw_queue = queue.Queue()
+        self.processed_queue = queue.Queue()
+
+        threading.Thread(target=self.process_image_queue).start()
+
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             print("[ERROR] Cannot open camera")
             return
 
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+
         # Set camera properties for better quality
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        
+        #cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        #cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        #cap.set(cv2.CAP_PROP_FPS, 30)
+
         print(f"[VIDEO] About to enter main loop with _run_flag = {self._run_flag}")
 
         try:
-            with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
-                frame_count = 0
-                while self._run_flag:
-                    frame_count += 1
-                    if frame_count % 30 == 0:  # Log every 30 frames
-                        print(f"[VIDEO] Processing frame {frame_count}, _run_flag = {self._run_flag}")
-                    
-                    ret, frame = cap.read()
-                    if not ret:
-                        print("[VIDEO] Failed to read frame")
-                        continue
 
-                    frame = normalize_lighting(frame)
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
-                    # Create MediaPipe image objects
-                    timestamp = int(round(time.time() * 1000))
-                    pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-                    face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+            while self._run_flag:
+                ret, frame = cap.read()
+                if not ret:
+                    print("[VIDEO] Failed to read frame")
+                    continue
 
-                    # Get results
-                    pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
-                    face_results = face_landmarker.detect_for_video(face_image, timestamp)
-                    
-                    # Create a copy for annotation
-                    annotated_image = np.copy(frame)
+                self.raw_queue.put(frame)
 
-                    if pose_results.pose_landmarks:
-                        # Don't draw landmarks - keep clean video feed for GUI
-                        # draw_landmarks(annotated_image, pose_results.pose_landmarks)
-                        
-                        # Analyze posture (this still works without drawing landmarks)
-                        result = analyze_posture(
-                            annotated_image, 
-                            pose_results.pose_landmarks[0], 
-                            face_results.face_landmarks if face_results.face_landmarks else None
-                        )
-                        self.update_stats_signal.emit(result)
-                    else:
-                        self.update_stats_signal.emit("No pose detected")
+                processed_frame = self.processed_queue.get()
+                self.change_pixmap_signal.emit(processed_frame)
 
-                    # Convert to RGB for Qt (now shows clean video without landmarks)
-                    rgb_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
-                    h, w, ch = rgb_image.shape
-                    bytes_per_line = ch * w
-                    qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                    self.change_pixmap_signal.emit(qt_image)
-
-                print(f"[VIDEO] Exited main loop with _run_flag = {self._run_flag}")
+            print(f"[VIDEO] Exited main loop with _run_flag = {self._run_flag}")
 
         except Exception as e:
             print(f"[VIDEO] Exception in video thread: {e}")
@@ -236,7 +252,7 @@ class VideoThread(QThread):
         print("[VIDEO] Stop method called...")
         self._run_flag = False
         print("[VIDEO] Run flag set to False")
-        
+
         # Don't call wait() here - let the main thread handle it
         print("[VIDEO] Stop method complete (no wait called)")
 
