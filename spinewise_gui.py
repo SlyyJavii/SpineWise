@@ -36,6 +36,7 @@ class SpeechRecognitionThread(QThread):
         self.listening_enabled = False
         self.recognizer = None
         self.microphone = None
+        self.show_landmarks = False
 
     def run(self):
         """Main speech recognition loop"""
@@ -152,14 +153,18 @@ class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     update_stats_signal = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, show_landmarks = False):
         super().__init__()
         self._run_flag = True  # Make sure this is always True when created
         self.pose_landmarker = None
         self.face_landmarker = None
         self.raw_queue = None
         self.processed_queue = None
+        self.show_landmarks = show_landmarks
         print("[VIDEO] VideoThread initialized with _run_flag = True")
+
+    def set_landmark_visibility(self, show_landmarks):
+        self.show_landmarks = show_landmarks
 
     def process_image_queue(self):
         with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
@@ -182,8 +187,9 @@ class VideoThread(QThread):
                 annotated_image = np.copy(frame)
 
                 if pose_results.pose_landmarks:
-                    # Don't draw landmarks - keep clean video feed for GUI
-                    # draw_landmarks(annotated_image, pose_results.pose_landmarks)
+                    #draw landmarks only if setting is enabled
+                    if self.show_landmarks:
+                        draw_landmarks(annotated_image, pose_results.pose_landmarks)
 
                     # Analyze posture (this still works without drawing landmarks)
                     result = analyze_posture(
@@ -267,6 +273,7 @@ class App(QMainWindow):
         self.notification_volume = 50
         self.beep_interval = 2.0
         self.alert_duration = 10.0
+        self.show_landmarks = False
 
         # CRITICAL: Set GUI mode to prevent backend speech recognition conflicts
         set_gui_mode(True)
@@ -402,8 +409,27 @@ class App(QMainWindow):
     def init_settings_tab(self):
         layout = QVBoxLayout()
 
+        #visual settings group
+        visual_group = QGroupBox("Visual Settings")
+        visual_layout = QFormLayout()
+
+        #landmark toggle
+        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed")
+        self.landmark_checkbox.setChecked(self.show_landmarks)
+        self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
+        visual_layout.addRow("Landmarks:", self.landmark_checkbox)
+
+        #info about the landmark toggle
+        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed")
+        landmark_info.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
+        visual_layout.addRow("", landmark_info)
+
+        visual_group.setLayout(visual_layout)
+        layout.addWidget(visual_group)
+
         notif_group = QGroupBox("Notification Settings")
         notif_layout = QFormLayout()
+        
 
         # Volume Control
         self.volume_slider = QSlider(Qt.Horizontal)
@@ -525,6 +551,20 @@ Note: Enable voice commands with the checkbox above first.
 
         layout.addStretch()
         self.settings_tab.setLayout(layout)
+    
+    def toggle_landmark_visibility(self, state):
+        self.show_landmarks = (state == Qt.Checked)
+        status = "enabled" if self.show_landmarks else "disabled"
+        print(f"[GUI] Landmark visibility {status}")
+
+        if self.video_thread and self.video_thread.isRunning():
+            self.video_thread.set_landmark_visibility(self.show_landmarks)
+        # Provide user feedback
+        if self.show_landmarks:
+            self.stats_display.setText("Landmarks enabled - pose detection points will be visible")
+        else:
+            self.stats_display.setText("Landmarks disabled - clean video feed")
+    
 
     def _on_volume_changed(self, value):
         self.notification_volume = value
@@ -700,7 +740,7 @@ Note: Enable voice commands with the checkbox above first.
 
         # Create a completely new video thread
         print("[INFO] Creating new video thread...")
-        self.video_thread = VideoThread()
+        self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
 
