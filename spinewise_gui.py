@@ -13,13 +13,14 @@ import speech_recognition as sr
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QWidget, QTabWidget, QMainWindow,
     QFileDialog, QTextEdit, QHBoxLayout, QCheckBox, QProgressBar, QGroupBox, QFormLayout, QSlider, QDoubleSpinBox,
+    QSpinBox
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 import backend
 from backend import (
-    analyze_posture, get_pose_landmarker, get_face_landmarker, 
-    draw_landmarks, normalize_lighting, is_calibrating, 
+    analyze_posture, get_pose_landmarker, get_face_landmarker,
+    draw_landmarks, normalize_lighting, is_calibrating,
     calibration_start_time, calibration_data, set_gui_mode
 )
 
@@ -27,38 +28,38 @@ from backend import (
 class SpeechRecognitionThread(QThread):
     """Thread for continuous speech recognition"""
     command_detected = pyqtSignal(str)  # Signal to emit recognized commands
-    status_update = pyqtSignal(str)     # Signal for status updates
-    
+    status_update = pyqtSignal(str)  # Signal for status updates
+
     def __init__(self):
         super().__init__()
         self._run_flag = True
         self.listening_enabled = False
         self.recognizer = None
         self.microphone = None
-        
+
     def run(self):
         """Main speech recognition loop"""
         try:
             self.recognizer = sr.Recognizer()
-            
+
             # Try to find the best microphone
             mic_list = sr.Microphone.list_microphone_names()
             print(f"[SPEECH] Available microphones: {mic_list}")
-            
+
             # Use default microphone
             self.microphone = sr.Microphone()
-            
+
             # Much more aggressive settings for better pickup
             self.recognizer.energy_threshold = 100  # Even lower threshold
             self.recognizer.dynamic_energy_threshold = True
-            self.recognizer.pause_threshold = 0.5   # Shorter pause detection
+            self.recognizer.pause_threshold = 0.5  # Shorter pause detection
             self.recognizer.phrase_threshold = 0.2  # More sensitive phrase detection
             self.recognizer.non_speaking_duration = 0.3  # Shorter non-speaking detection
-            
+
             # Adjust for ambient noise once at startup
             print("[SPEECH] Adjusting for ambient noise...")
             self.status_update.emit("Calibrating microphone...")
-            
+
             with self.microphone as source:
                 # Much shorter adjustment to preserve low threshold
                 self.recognizer.adjust_for_ambient_noise(source, duration=1)
@@ -66,10 +67,10 @@ class SpeechRecognitionThread(QThread):
                 if self.recognizer.energy_threshold > 300:
                     self.recognizer.energy_threshold = 200
                 print(f"[SPEECH] Final energy threshold: {self.recognizer.energy_threshold}")
-                
+
             print("[SPEECH] Speech recognition ready")
             self.status_update.emit("Ready - try saying 'start'")
-            
+
             while self._run_flag:
                 if self.listening_enabled:
                     try:
@@ -77,13 +78,13 @@ class SpeechRecognitionThread(QThread):
                         with self.microphone as source:
                             print("[SPEECH] 🎤 Listening... (say 'start', 'stop', 'calibrate', or 'exit')")
                             self.status_update.emit("🎤 Listening...")
-                            
+
                             # Even longer timeout and phrase limit for better capture
                             audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=5)
-                            
+
                         print("[SPEECH] 🔄 Audio captured, processing...")
                         self.status_update.emit("🔄 Processing...")
-                        
+
                         # Try multiple recognition methods for better accuracy
                         command = None
                         try:
@@ -93,17 +94,18 @@ class SpeechRecognitionThread(QThread):
                         except:
                             try:
                                 # Fallback: Google with different settings
-                                command = self.recognizer.recognize_google(audio, language='en', show_all=False).lower().strip()
+                                command = self.recognizer.recognize_google(audio, language='en',
+                                                                           show_all=False).lower().strip()
                                 print(f"[SPEECH] ✅ Google fallback recognized: '{command}'")
                             except:
                                 print("[SPEECH] ❌ Both Google recognition attempts failed")
                                 continue
-                        
+
                         if command:
                             # Emit the recognized command
                             self.command_detected.emit(command)
                             self.status_update.emit(f"✅ Heard: '{command}'")
-                        
+
                     except sr.WaitTimeoutError:
                         # Timeout is normal, just continue
                         print("[SPEECH] ⏰ Listening timeout (normal)")
@@ -124,21 +126,21 @@ class SpeechRecognitionThread(QThread):
                 else:
                     # Not listening, sleep briefly
                     time.sleep(0.5)
-                    
+
         except Exception as e:
             print(f"[SPEECH] ❌ Failed to initialize: {e}")
             self.status_update.emit(f"❌ Mic initialization failed: {e}")
-    
+
     def enable_listening(self):
         """Enable speech recognition"""
         self.listening_enabled = True
         print("[SPEECH] Speech recognition enabled")
-        
+
     def disable_listening(self):
         """Disable speech recognition"""
         self.listening_enabled = False
         print("[SPEECH] Speech recognition disabled")
-        
+
     def stop(self):
         """Stop the speech recognition thread"""
         self._run_flag = False
@@ -198,7 +200,7 @@ class VideoThread(QThread):
                 h, w, ch = rgb_image.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                #self.change_pixmap_signal.emit(qt_image)
+                # self.change_pixmap_signal.emit(qt_image)
                 self.processed_queue.put(qt_image)
 
     def run(self):
@@ -220,9 +222,9 @@ class VideoThread(QThread):
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
 
         # Set camera properties for better quality
-        #cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        #cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        #cap.set(cv2.CAP_PROP_FPS, 30)
+        # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        # cap.set(cv2.CAP_PROP_FPS, 30)
 
         print(f"[VIDEO] About to enter main loop with _run_flag = {self._run_flag}")
 
@@ -265,10 +267,10 @@ class App(QMainWindow):
         self.notification_volume = 50
         self.beep_interval = 2.0
         self.alert_duration = 10.0
-        
+
         # CRITICAL: Set GUI mode to prevent backend speech recognition conflicts
         set_gui_mode(True)
-        
+
         self.setWindowTitle("SpineWise Posture App - With Voice Control")
         self.setGeometry(100, 100, 1400, 900)
 
@@ -288,7 +290,7 @@ class App(QMainWindow):
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
-        
+
         self.speech_thread = SpeechRecognitionThread()
         self.speech_thread.command_detected.connect(self.handle_voice_command)
         self.speech_thread.status_update.connect(self.update_speech_status)
@@ -297,7 +299,7 @@ class App(QMainWindow):
         self.init_live_tab()
         self.init_log_tab()
         self.init_settings_tab()
-        
+
         # Start speech recognition thread
         self.speech_thread.start()
 
@@ -319,7 +321,7 @@ class App(QMainWindow):
 
         # Status displays
         status_layout = QVBoxLayout()
-        
+
         # Main posture status - big and prominent
         self.posture_status = QLabel("Posture Status: Not monitoring")
         self.posture_status.setAlignment(Qt.AlignCenter)
@@ -333,18 +335,19 @@ class App(QMainWindow):
             color: #333;
         """)
         status_layout.addWidget(self.posture_status)
-        
+
         # Detailed stats display - smaller, secondary info
         self.stats_display = QLabel("📊 Detailed Status: Click 'Start Camera' to begin monitoring")
         self.stats_display.setAlignment(Qt.AlignCenter)
-        self.stats_display.setStyleSheet("font-size: 14px; padding: 8px; background-color: #e8f4fd; border-radius: 5px; color: #666;")
+        self.stats_display.setStyleSheet(
+            "font-size: 14px; padding: 8px; background-color: #e8f4fd; border-radius: 5px; color: #666;")
         status_layout.addWidget(self.stats_display)
-        
+
         layout.addLayout(status_layout)
 
         # Control buttons
         btn_layout = QHBoxLayout()
-        
+
         self.start_button = QPushButton("🎥 Start Camera")
         self.start_button.clicked.connect(self.start_video)
         self.start_button.setStyleSheet("font-size: 14px; padding: 10px;")
@@ -355,14 +358,14 @@ class App(QMainWindow):
         self.stop_button.setEnabled(False)
         self.stop_button.setStyleSheet("font-size: 14px; padding: 10px;")
         btn_layout.addWidget(self.stop_button)
-        
+
         self.calibrate_button = QPushButton("⚙️ Calibrate")
         self.calibrate_button.clicked.connect(self.start_calibration)
         self.calibrate_button.setStyleSheet("font-size: 14px; padding: 10px; background-color: #4CAF50; color: white;")
         btn_layout.addWidget(self.calibrate_button)
 
         layout.addLayout(btn_layout)
-        
+
         # Voice command status
         self.voice_status = QLabel("🎤 Voice Status: Initializing...")
         self.voice_status.setAlignment(Qt.AlignCenter)
@@ -373,22 +376,22 @@ class App(QMainWindow):
 
     def init_log_tab(self):
         layout = QVBoxLayout()
-        
+
         title = QLabel("Posture Data Log")
         title.setFont(QFont("Arial", 16, QFont.Bold))
         layout.addWidget(title)
-        
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setPlainText("Click 'Load Posture Log' to view logged data...")
         layout.addWidget(self.log_text)
 
         btn_layout = QHBoxLayout()
-        
+
         load_button = QPushButton("📊 Load Posture Log")
         load_button.clicked.connect(self.load_log)
         btn_layout.addWidget(load_button)
-        
+
         refresh_button = QPushButton("🔄 Refresh")
         refresh_button.clicked.connect(self.load_log)
         btn_layout.addWidget(refresh_button)
@@ -399,9 +402,10 @@ class App(QMainWindow):
     def init_settings_tab(self):
         layout = QVBoxLayout()
 
-notif_group = QGroupBox("Notification Settings")
+        notif_group = QGroupBox("Notification Settings")
         notif_layout = QFormLayout()
 
+        # Volume Control
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(self.notification_volume)
@@ -415,6 +419,7 @@ notif_group = QGroupBox("Notification Settings")
         volume_layout.addWidget(self.volume_label)
         notif_layout.addRow("Notification Volume:", volume_layout)
 
+        # Beep Interval Control
         self.beep_interval_spinbox = QDoubleSpinBox()
         self.beep_interval_spinbox.setRange(0.5, 10.0)
         self.beep_interval_spinbox.setSingleStep(0.5)
@@ -423,6 +428,7 @@ notif_group = QGroupBox("Notification Settings")
         self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
         notif_layout.addRow("Beep Interval:", self.beep_interval_spinbox)
 
+        # Alert Duration Control
         self.alert_duration_spinbox = QSpinBox()
         self.alert_duration_spinbox.setRange(1, 60)
         self.alert_duration_spinbox.setValue(int(self.alert_duration))
@@ -432,19 +438,22 @@ notif_group = QGroupBox("Notification Settings")
 
         notif_group.setLayout(notif_layout)
         layout.addWidget(notif_group)
-        
+
+        # Add some spacing
+        layout.addStretch()
+
         # Voice Control Section
         voice_section = QLabel("🎤 Voice Control Settings")
         voice_section.setFont(QFont("Arial", 14, QFont.Bold))
         layout.addWidget(voice_section)
-        
+
         # Voice enable/disable
         self.voice_checkbox = QCheckBox("Enable Voice Commands")
         self.voice_checkbox.setChecked(False)  # Start disabled
         self.voice_checkbox.stateChanged.connect(self.toggle_voice_recognition)
         self.voice_checkbox.setStyleSheet("font-size: 12px; padding: 5px;")
         layout.addWidget(self.voice_checkbox)
-        
+
         # Voice commands help
         voice_help = QLabel("""
 🎤 Voice Commands Available:
@@ -474,24 +483,24 @@ Note: Enable voice commands with the checkbox above first.
         voice_help.setWordWrap(True)
         voice_help.setStyleSheet("padding: 15px; background-color: #e8f4fd; border-radius: 5px; font-size: 11px;")
         layout.addWidget(voice_help)
-        
+
         layout.addWidget(QLabel(""))  # Spacer
-        
+
         # Data Management Section
         data_section = QLabel("📁 Data Management")
         data_section.setFont(QFont("Arial", 14, QFont.Bold))
         layout.addWidget(data_section)
-        
+
         data_btn_layout = QHBoxLayout()
-        
+
         export_button = QPushButton("💾 Export Log as CSV")
         export_button.clicked.connect(self.export_log)
         data_btn_layout.addWidget(export_button)
-        
+
         clear_log_button = QPushButton("🗑️ Clear Log Data")
         clear_log_button.clicked.connect(self.clear_log)
         data_btn_layout.addWidget(clear_log_button)
-        
+
         layout.addLayout(data_btn_layout)
 
         # Instructions
@@ -513,7 +522,7 @@ Note: Enable voice commands with the checkbox above first.
         info_label.setWordWrap(True)
         info_label.setStyleSheet("padding: 20px; background-color: #f8f9fa; border-radius: 5px; margin-top: 10px;")
         layout.addWidget(info_label)
-        
+
         layout.addStretch()
         self.settings_tab.setLayout(layout)
 
@@ -535,73 +544,79 @@ Note: Enable voice commands with the checkbox above first.
         if state == Qt.Checked:
             self.speech_thread.enable_listening()
             self.voice_status.setText("🎤 Voice Status: Listening for commands...")
-            self.voice_status.setStyleSheet("font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
+            self.voice_status.setStyleSheet(
+                "font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
             print("[GUI] Voice recognition enabled")
         else:
             self.speech_thread.disable_listening()
             self.voice_status.setText("🎤 Voice Status: Disabled")
-            self.voice_status.setStyleSheet("font-size: 12px; padding: 5px; background-color: #f8d7da; border-radius: 3px;")
+            self.voice_status.setStyleSheet(
+                "font-size: 12px; padding: 5px; background-color: #f8d7da; border-radius: 3px;")
             print("[GUI] Voice recognition disabled")
 
     def handle_voice_command(self, command):
         """Handle recognized voice commands with improved matching"""
         print(f"[GUI] Processing voice command: '{command}'")
-        
+
         # Convert to lowercase and split into words for better matching
         words = command.lower().split()
         command_lower = command.lower()
-        
+
         # DEBUG: Show what we're analyzing
         print(f"[DEBUG] Words: {words}")
         print(f"[DEBUG] Command lower: '{command_lower}'")
-        
+
         # Show what was heard in the GUI
         self.voice_status.setText(f"🎤 Heard: '{command}'")
-        
+
         # CALIBRATION COMMANDS - More flexible matching for "calibrate"
         calibration_triggers = [
-            "calibrate", "calibration", "collab", "cal", "caliber", 
+            "calibrate", "calibration", "collab", "cal", "caliber",
             "collaborate", "calib", "kelly", "cali", "cab", "start calibration"
         ]
         if any(trigger in command_lower for trigger in calibration_triggers):
             print("[VOICE] ✅ Calibration command detected")
             self.start_calibration()
             self.stats_display.setText("🎤 Voice Command: Starting calibration...")
-            
+
         # STOP CAMERA COMMANDS - Only stops camera, keeps app running (CHECK THIS FIRST)
-        elif any(phrase in command_lower for phrase in ["stop camera", "pause camera", "turn off camera", "camera off"]) or (len(words) == 1 and words[0] in ["stop", "pause", "halt", "off"]):
+        elif any(phrase in command_lower for phrase in
+                 ["stop camera", "pause camera", "turn off camera", "camera off"]) or (
+                len(words) == 1 and words[0] in ["stop", "pause", "halt", "off"]):
             print("[VOICE] ✅ Stop camera command detected (app stays open)")
             if self.video_thread.isRunning():
                 self.stop_video()
                 self.stats_display.setText("🎤 Camera stopped - app still running. Say 'start' to resume.")
             else:
                 self.stats_display.setText("🎤 Camera already stopped. Say 'start' to begin.")
-                
+
         # EXIT COMMANDS - Only for closing the entire app (MORE SPECIFIC)
-        elif any(phrase in command_lower for phrase in ["exit", "quit", "close app", "goodbye", "end app", "close application", "shut down"]):
+        elif any(phrase in command_lower for phrase in
+                 ["exit", "quit", "close app", "goodbye", "end app", "close application", "shut down"]):
             print("[VOICE] ✅ Exit application command detected (closing app)")
             self.stats_display.setText("🎤 Voice Command: Exiting application...")
             QTimer.singleShot(1000, self.close)  # Close after 1 second
-                
+
         # START COMMANDS (more flexible matching)
-        elif any(word in ["start", "begin", "go", "play", "run", "on"] for word in words) or any(phrase in command_lower for phrase in ["turn on", "start camera", "begin camera"]):
-            print("[VOICE] ✅ Start camera command detected") 
+        elif any(word in ["start", "begin", "go", "play", "run", "on"] for word in words) or any(
+                phrase in command_lower for phrase in ["turn on", "start camera", "begin camera"]):
+            print("[VOICE] ✅ Start camera command detected")
             if not self.video_thread.isRunning():
                 self.start_video()
                 self.stats_display.setText("🎤 Camera started successfully!")
             else:
                 self.stats_display.setText("🎤 Camera already running")
-                
+
         # HELP COMMAND
         elif any(word in ["help", "commands", "what", "options"] for word in words):
             print("[VOICE] ✅ Help command detected")
             self.stats_display.setText("🎤 Commands: 'start' (camera), 'stop' (camera), 'cal' (calibrate), 'exit' (app)")
-            
+
         else:
             print(f"[VOICE] ❌ Unknown command: '{command}'")
             print(f"[VOICE] Commands: stop (camera only), exit (close app), start (camera), cal (calibrate)")
             self.stats_display.setText(f"🎤 Unknown: '{command}' - Try: stop, start, cal, exit")
-            
+
         # Reset voice status after 4 seconds to show the feedback longer
         QTimer.singleShot(4000, lambda: self.reset_voice_status())
 
@@ -614,7 +629,8 @@ Note: Enable voice commands with the checkbox above first.
         """Reset voice status to default listening state"""
         if self.voice_checkbox.isChecked():
             self.voice_status.setText("🎤 Voice Status: Listening for commands...")
-            self.voice_status.setStyleSheet("font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
+            self.voice_status.setStyleSheet(
+                "font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
 
     def start_calibration(self):
         """Start the calibration process"""
@@ -655,9 +671,9 @@ Note: Enable voice commands with the checkbox above first.
     def export_log(self):
         if os.path.exists("posture_trend_log.csv"):
             dest, _ = QFileDialog.getSaveFileName(
-                self, 
-                "Save Log", 
-                "posture_log_export.csv", 
+                self,
+                "Save Log",
+                "posture_log_export.csv",
                 "CSV Files (*.csv)"
             )
             if dest:
@@ -675,27 +691,27 @@ Note: Enable voice commands with the checkbox above first.
 
     def start_video(self):
         print("[INFO] Start button clicked")
-        
+
         # Stop any existing thread first
         if self.video_thread and self.video_thread.isRunning():
             print("[INFO] Stopping existing video thread...")
             self.video_thread._run_flag = False
             self.video_thread.wait(1000)  # Wait up to 1 second
-            
+
         # Create a completely new video thread
         print("[INFO] Creating new video thread...")
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
-        
+
         # Start the new thread
         self.video_thread.start()
-        
+
         # Update UI
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.stats_display.setText("🎥 Camera starting...")
-        
+
         # Set initial monitoring state - this won't change until we get stable results
         self.posture_status.setText("🔄 Monitoring Posture...")
         self.posture_status.setStyleSheet("""
@@ -707,29 +723,29 @@ Note: Enable voice commands with the checkbox above first.
             border-radius: 10px;
             color: #004085;
         """)
-        
+
         print("[INFO] New video thread started")
 
     def stop_video(self):
         print("[INFO] Stop button clicked - stopping camera only, keeping app open")
-        
+
         if self.video_thread and self.video_thread.isRunning():
             print("[INFO] Video thread is running, stopping it...")
-            
+
             # Set the stop flag first
             self.video_thread._run_flag = False
             print("[INFO] Set video thread stop flag")
-            
+
             # Give the thread a moment to finish its current iteration
             QTimer.singleShot(100, self.finish_video_stop)
         else:
             print("[INFO] Video thread was not running")
             self.finish_video_stop()
-    
+
     def finish_video_stop(self):
         """Complete the video stopping process"""
         print("[INFO] Finishing video stop process...")
-        
+
         # Don't call wait() - just let the thread finish naturally
         if self.video_thread and self.video_thread.isRunning():
             print("[INFO] Thread still running, waiting a bit more...")
@@ -738,11 +754,11 @@ Note: Enable voice commands with the checkbox above first.
         else:
             print("[INFO] Thread stopped naturally")
             self.update_ui_after_stop()
-    
+
     def force_video_stop(self):
         """Force stop if thread doesn't stop naturally"""
         print("[INFO] Force stopping video thread...")
-        
+
         if self.video_thread and self.video_thread.isRunning():
             try:
                 # Try terminate as last resort, but don't wait indefinitely
@@ -750,13 +766,13 @@ Note: Enable voice commands with the checkbox above first.
                 print("[INFO] Thread terminated")
             except Exception as e:
                 print(f"[INFO] Error terminating thread: {e}")
-        
+
         self.update_ui_after_stop()
-    
+
     def update_ui_after_stop(self):
         """Update UI after video is stopped"""
         print("[INFO] Updating UI after video stop...")
-        
+
         # Update UI state
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
@@ -773,12 +789,12 @@ Note: Enable voice commands with the checkbox above first.
         """)
         self.image_label.setText("Click 'Start Camera' to begin webcam feed")
         self.image_label.clear()  # Clear any existing image
-        
+
         print("[INFO] UI updated - app should remain open")
-        
+
         # Verify app is still alive
         QTimer.singleShot(1000, self.check_app_status)
-    
+
     def check_app_status(self):
         """Check if the app is still running after stop command"""
         print("[DEBUG] App status check - if you see this, the app is still running!")
@@ -787,8 +803,8 @@ Note: Enable voice commands with the checkbox above first.
     def update_image(self, qt_image):
         pixmap = QPixmap.fromImage(qt_image)
         scaled_pixmap = pixmap.scaled(
-            self.image_label.size(), 
-            Qt.KeepAspectRatio, 
+            self.image_label.size(),
+            Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
         self.image_label.setPixmap(scaled_pixmap)
@@ -798,12 +814,12 @@ Note: Enable voice commands with the checkbox above first.
         current_text = self.stats_display.text()
         if "🎤 Voice Command:" not in current_text:
             self.stats_display.setText(f"📊 Analysis: {text}")
-        
+
         # Only update the main posture status for STABLE, confirmed results
         # Don't update for transitioning states or temporary detections
-        if text and not any(unstable_word in text.lower() for unstable_word in 
-                           ["detecting", "stabilizing", "transitioning", "confirming", "analyzing"]):
-            
+        if text and not any(unstable_word in text.lower() for unstable_word in
+                            ["detecting", "stabilizing", "transitioning", "confirming", "analyzing"]):
+
             # Only update main status for confident, stable results
             if "good posture" in text.lower():
                 self.posture_status.setText("✅ Good Posture")
@@ -849,31 +865,31 @@ Note: Enable voice commands with the checkbox above first.
                     border-radius: 10px;
                     color: #495057;
                 """)
-        
+
         # For transitioning/analyzing states, keep current main status but show activity in detailed section
         # The main status will only change when we get a confirmed, stable result
 
     def closeEvent(self, event):
         """Handle window closing"""
         print("[GUI] ⚠️ closeEvent triggered - checking why...")
-        
+
         # Print stack trace to see what's calling close
         import traceback
         print("[GUI] Close event stack trace:")
         traceback.print_stack()
-        
+
         print("[GUI] Stopping threads before closing...")
-        
+
         # Stop video thread
         if self.video_thread.isRunning():
             print("[GUI] Stopping video thread...")
             self.video_thread.stop()
-            
+
         # Stop speech thread
         if self.speech_thread.isRunning():
             print("[GUI] Stopping speech thread...")
             self.speech_thread.stop()
-            
+
         print("[GUI] All threads stopped, accepting close event")
         event.accept()
         print("[GUI] Application closed")
@@ -883,7 +899,7 @@ Note: Enable voice commands with the checkbox above first.
 if __name__ == '__main__':
     import sys
     from PyQt5.QtWidgets import QApplication
-    
+
     app = QApplication(sys.argv)
     window = App()
     window.show()
