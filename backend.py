@@ -14,12 +14,17 @@ from os.path import exists
 from urllib.request import urlretrieve
 from posture_image_logger import save_posture_image, initialize_folders
 
-# Initialize folders for image logging
+# Globals for settings hooks in relation to pygame.
+notification_volume = 50  # Default volume (0-100).
+beep_interval = 2  # Default beep interval in seconds.
+alert_duration = 10  # Default alert duration in seconds.
+
 initialize_folders()
 pygame.init()
 pygame.mixer.init()
 
 beep = pygame.mixer.Sound("bad_posture_alert.wav")
+beep.set_volume(notification_volume / 100.0)
 
 #Globals for posture tracking 
 start_time = None
@@ -701,8 +706,6 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             
             # Alert logic (using stable confidence to prevent false alarms)
             alert_threshold = 3
-            alert_duration = 10
-            beep_interval = 2
 
             if (stable_confidence >= alert_threshold or head_confidence_score >= alert_threshold) and not is_transitioning:
                 if start_time is None:
@@ -711,7 +714,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     elapsed = time.time() - start_time
                     if elapsed >= alert_duration:
                         if not loop_started:
-                            print("[Alert] Bad posture detected for 10 seconds. Starting beep loop.")
+                            print(f"[Alert] Bad posture detected for {alert_duration} seconds. Starting beep loop.")
                             loop_started = True
 
                 if loop_started and time.time() - last_beep_time >= beep_interval:
@@ -922,6 +925,22 @@ def run_standalone():
 
 # Add a flag to prevent any background speech recognition in GUI mode
 _gui_mode = False
+
+def update_notification_volume(volume):
+    global notification_volume
+    notification_volume = volume
+    beep.set_volume(volume / 100.0)  # Convert to pygame's 0.0-1.0 range
+    # print(f"Notification volume set to {volume}%") Here for temporary debugging. Not advised due to log spam
+
+def update_beep_interval(interval):
+    global beep_interval
+    beep_interval = interval
+    print(f"Beep interval set to {interval} seconds")
+
+def update_alert_duration(duration):
+    global alert_duration
+    alert_duration = duration
+    print(f"Alert duration set to {duration} seconds")
 
 def set_gui_mode(enabled=True):
     """Set whether we're running in GUI mode to prevent conflicts"""
