@@ -1,0 +1,8 @@
+opencv-python
+mediapipe
+pygame
+numpy
+speechrecognition
+kaggle
+PyQt5
+PyQtWebEngine
