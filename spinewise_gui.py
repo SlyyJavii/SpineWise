@@ -12,10 +12,11 @@ import threading
 import speech_recognition as sr
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QWidget, QTabWidget, QMainWindow,
-    QFileDialog, QTextEdit, QHBoxLayout, QCheckBox, QProgressBar
+    QFileDialog, QTextEdit, QHBoxLayout, QCheckBox, QProgressBar, QGroupBox, QFormLayout, QSlider, QDoubleSpinBox,
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+import backend
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker, 
     draw_landmarks, normalize_lighting, is_calibrating, 
@@ -260,6 +261,10 @@ class VideoThread(QThread):
 class App(QMainWindow):
     def __init__(self):
         super().__init__()
+
+        self.notification_volume = 50
+        self.beep_interval = 2.0
+        self.alert_duration = 10.0
         
         # CRITICAL: Set GUI mode to prevent backend speech recognition conflicts
         set_gui_mode(True)
@@ -393,6 +398,40 @@ class App(QMainWindow):
 
     def init_settings_tab(self):
         layout = QVBoxLayout()
+
+notif_group = QGroupBox("Notification Settings")
+        notif_layout = QFormLayout()
+
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(self.notification_volume)
+        self.volume_slider.setTickPosition(QSlider.TicksBelow)
+        self.volume_slider.setTickInterval(10)
+        self.volume_slider.valueChanged.connect(self._on_volume_changed)
+
+        self.volume_label = QLabel(f"{self.notification_volume}%")
+        volume_layout = QHBoxLayout()
+        volume_layout.addWidget(self.volume_slider)
+        volume_layout.addWidget(self.volume_label)
+        notif_layout.addRow("Notification Volume:", volume_layout)
+
+        self.beep_interval_spinbox = QDoubleSpinBox()
+        self.beep_interval_spinbox.setRange(0.5, 10.0)
+        self.beep_interval_spinbox.setSingleStep(0.5)
+        self.beep_interval_spinbox.setValue(self.beep_interval)
+        self.beep_interval_spinbox.setSuffix(" seconds")
+        self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
+        notif_layout.addRow("Beep Interval:", self.beep_interval_spinbox)
+
+        self.alert_duration_spinbox = QSpinBox()
+        self.alert_duration_spinbox.setRange(1, 60)
+        self.alert_duration_spinbox.setValue(int(self.alert_duration))
+        self.alert_duration_spinbox.setSuffix(" seconds")
+        self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
+        notif_layout.addRow("Alert Duration:", self.alert_duration_spinbox)
+
+        notif_group.setLayout(notif_layout)
+        layout.addWidget(notif_group)
         
         # Voice Control Section
         voice_section = QLabel("🎤 Voice Control Settings")
@@ -477,6 +516,19 @@ Note: Enable voice commands with the checkbox above first.
         
         layout.addStretch()
         self.settings_tab.setLayout(layout)
+
+    def _on_volume_changed(self, value):
+        self.notification_volume = value
+        self.volume_label.setText(f"{value}%")
+        backend.update_notification_volume(value)
+
+    def _on_beep_interval_changed(self, value):
+        self.beep_interval = value
+        backend.update_beep_interval(value)
+
+    def _on_alert_duration_changed(self, value):
+        self.alert_duration = value
+        backend.update_alert_duration(value)
 
     def toggle_voice_recognition(self, state):
         """Enable or disable voice recognition"""
