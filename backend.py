@@ -15,9 +15,9 @@ from urllib.request import urlretrieve
 from posture_image_logger import save_posture_image, initialize_folders
 
 # Globals for settings hooks in relation to pygame.
-notification_volume = 50  # Default volume (0-100).
-beep_interval = 2  # Default beep interval in seconds.
-alert_duration = 10  # Default alert duration in seconds.
+notification_volume = 50  # Default volume (0-100)
+beep_interval = 2  # Default beep interval in seconds
+alert_duration = 10  # Default alert duration in seconds
 
 initialize_folders()
 pygame.init()
@@ -26,9 +26,9 @@ pygame.mixer.init()
 beep = pygame.mixer.Sound("bad_posture_alert.wav")
 beep.set_volume(notification_volume / 100.0)
 
-#Globals for posture tracking 
+# Globals for posture tracking
 start_time = None
-loop_started = False 
+loop_started = False
 last_beep_time = 0
 
 from mediapipe.tasks import python
@@ -37,11 +37,15 @@ from mediapipe.python.solutions.pose import PoseLandmark
 
 pose_model = "pose_landmarker_full.task"
 if not exists(pose_model):
-    pose_model = urlretrieve("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task", "pose_landmarker_full.task")[0]
+    pose_model = urlretrieve(
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
+        "pose_landmarker_full.task")[0]
 
 face_model = "face_landmarker.task"
 if not exists(face_model):
-    face_model = urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task", "face_landmarker.task")[0]
+    face_model = urlretrieve(
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+        "face_landmarker.task")[0]
 
 last_log_time = time.time()
 
@@ -58,12 +62,12 @@ calibration_data = {
     "face_torso_heights": [],
     "shoulder_ear_distance": [],
     "clavicle_y": [],
-    "face_mesh_tilt": [],      # Face Mesh head tilt baseline
-    "face_mesh_rotation": [],  # Face Mesh head rotation baseline  
-    "face_mesh_lean": [],      # Face Mesh forward lean baseline
+    "face_mesh_tilt": [],  # Face Mesh head tilt baseline
+    "face_mesh_rotation": [],  # Face Mesh head rotation baseline
+    "face_mesh_lean": [],  # Face Mesh forward lean baseline
     "face_mesh_distance": [],  # Face Mesh distance baseline
-    "raw_eye_tilt_samples": [], # NEW: Store raw tilt samples to detect natural asymmetry
-    "nose_eye_distances": []   # NEW: Store nose-to-eye baseline for looking down detection
+    "raw_eye_tilt_samples": [],  # NEW: Store raw tilt samples to detect natural asymmetry
+    "nose_eye_distances": []  # NEW: Store nose-to-eye baseline for looking down detection
 }
 countdown_duration = 3
 hold_duration = 5
@@ -74,7 +78,7 @@ alert_active = False
 
 mode = "front"
 prev_facial_distances = [0, 0, 0]  # Reduced cache size for faster response
-prev_torso_distances = [0, 0, 0]   # Reduced cache size for faster response
+prev_torso_distances = [0, 0, 0]  # Reduced cache size for faster response
 cache_idx = 0
 
 # Posture stability system
@@ -91,18 +95,18 @@ calibration_end_time = None  # When calibration last ended
 
 # Face Mesh landmark indices for head orientation
 FACE_LANDMARKS = {
-    "left_eye_corner": 33,    # Left eye outer corner
+    "left_eye_corner": 33,  # Left eye outer corner
     "right_eye_corner": 263,  # Right eye outer corner
-    "left_eye_center": 159,   # Left eye center
+    "left_eye_center": 159,  # Left eye center
     "right_eye_center": 386,  # Right eye center
-    "nose_tip": 1,            # Nose tip
-    "nose_bridge": 6,         # Nose bridge
-    "chin": 175,              # Chin center
-    "forehead": 10,           # Forehead center
-    "left_cheek": 234,        # Left cheek
-    "right_cheek": 454,       # Right cheek
-    "left_temple": 127,       # Left temple
-    "right_temple": 356       # Right temple
+    "nose_tip": 1,  # Nose tip
+    "nose_bridge": 6,  # Nose bridge
+    "chin": 175,  # Chin center
+    "forehead": 10,  # Forehead center
+    "left_cheek": 234,  # Left cheek
+    "right_cheek": 454,  # Right cheek
+    "left_temple": 127,  # Left temple
+    "right_temple": 356  # Right temple
 }
 posture_status_labels = {
     "good": ("Good Posture", (0, 255, 0)),
@@ -110,10 +114,11 @@ posture_status_labels = {
     "bad": ("Bad Posture", (255, 0, 0))  # Red
 }
 
-#globals for data logger
-last_logged_time = 0 #for rate limiting dataset logging
-is_manual_labeling = False #start in auto mode by default
+# globals for data logger
+last_logged_time = 0  # for rate limiting dataset logging
+is_manual_labeling = False  # start in auto mode by default
 latest_voice_label = None  # To hold voice input while labeling mode is active
+
 
 # Add function to create pose landmarker
 def get_pose_landmarker():
@@ -125,6 +130,7 @@ def get_pose_landmarker():
         min_tracking_confidence=0.7)
     return mp.tasks.vision.PoseLandmarker.create_from_options(pose_options)
 
+
 # Add function to create face landmarker
 def get_face_landmarker():
     base_face_options = python.BaseOptions(model_asset_path=face_model)
@@ -135,20 +141,22 @@ def get_face_landmarker():
         min_tracking_confidence=0.5)
     return mp.tasks.vision.FaceLandmarker.create_from_options(face_options)
 
-#data logger
-def log_posture_sample(features, label, frame=None,filename = "posture_dataset.csv"):
+
+# data logger
+def log_posture_sample(features, label, frame=None, filename="posture_dataset.csv"):
     header = list(features.keys()) + ["label"]
     row = list(features.values()) + [label]
 
     file_exists = os.path.exists(filename)
-    with open(filename, mode = 'a', newline = '') as file:
+    with open(filename, mode='a', newline='') as file:
         writer = csv.writer(file)
         if not file_exists:
             writer.writerow(header)
         writer.writerow(row)
-    if frame is not None: # Check if frame is available
+    if frame is not None:  # Check if frame is available
         # Save image with label
-        save_posture_image(frame, label) # Save image to the correct label folder
+        save_posture_image(frame, label)  # Save image to the correct label folder
+
 
 def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confidence_score):
     """Log posture data to the trend log file"""
@@ -159,6 +167,7 @@ def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confid
             writer.writerow(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
         writer.writerow([timestamp, mode, facing, posture_status, head_tilt, confidence_score])
 
+
 def update_posture_stability(confidence_score, max_score=7):
     """
     Update posture stability system with consistency buffer and state confirmation.
@@ -166,53 +175,52 @@ def update_posture_stability(confidence_score, max_score=7):
     """
     global posture_buffer, confidence_buffer, current_stable_posture, posture_transition_time
     global smoothed_confidence, calibration_end_time
-    
-    
+
     current_time = time.time()
-    
+
     # Check if we're in calibration grace period
     if calibration_end_time and (current_time - calibration_end_time) < calibration_grace_period:
         grace_remaining = calibration_grace_period - (current_time - calibration_end_time)
         return current_stable_posture, f"Stabilizing... ({grace_remaining:.1f}s)", True
-    
+
     # Apply exponential smoothing to confidence score
     smoothed_confidence = confidence_alpha * confidence_score + (1 - confidence_alpha) * smoothed_confidence
-    
+
     # Get current frame's posture status based on smoothed confidence
     current_frame_posture = get_posture_status(int(smoothed_confidence), max_score)
-    
+
     # Add to buffers
     posture_buffer.append(current_frame_posture)
     confidence_buffer.append(smoothed_confidence)
-    
+
     # Maintain buffer size
     if len(posture_buffer) > posture_buffer_size:
         posture_buffer.pop(0)
         confidence_buffer.pop(0)
-    
+
     # If buffer isn't full yet, stay with current stable posture
     if len(posture_buffer) < posture_buffer_size:
         return current_stable_posture, posture_status_labels[current_stable_posture][0], False
-    
+
     # Count occurrences of each posture in recent frames
     posture_counts = {"good": 0, "moderate": 0, "bad": 0}
     for posture in posture_buffer:
         posture_counts[posture] += 1
-    
+
     # Find the most frequent posture in recent frames
     candidate_posture = max(posture_counts, key=posture_counts.get)
     candidate_confidence = posture_counts[candidate_posture] / len(posture_buffer)
-    
+
     # Track transition timing
     if candidate_posture != current_stable_posture:
         # New candidate posture detected
         if candidate_posture not in posture_transition_time:
             posture_transition_time[candidate_posture] = current_time
-        
+
         # Check if candidate has been consistent long enough
         transition_duration = current_time - posture_transition_time[candidate_posture]
         confidence_threshold = 0.6 if candidate_posture == "bad" else 0.7  # Slightly easier to detect bad posture
-        
+
         if transition_duration >= min_transition_duration and candidate_confidence >= confidence_threshold:
             # Confirm the transition
             print(f"[POSTURE] Confirmed transition: {current_stable_posture} → {candidate_posture} "
@@ -227,10 +235,11 @@ def update_posture_stability(confidence_score, max_score=7):
     else:
         # Current posture is stable, clear any transition timers
         posture_transition_time = {}
-    
+
     # Return stable posture
     status_text = posture_status_labels[current_stable_posture][0]
     return current_stable_posture, status_text, False
+
 
 def get_posture_status(confidence_score, max_score=7):
     """Convert confidence score to simplified posture status"""
@@ -241,6 +250,7 @@ def get_posture_status(confidence_score, max_score=7):
     else:
         return "bad"
 
+
 def calculate_head_metrics_from_face_mesh(face_landmarks):
     """
     Calculate head orientation metrics using Face Mesh landmarks.
@@ -248,14 +258,14 @@ def calculate_head_metrics_from_face_mesh(face_landmarks):
     """
     if not face_landmarks or len(face_landmarks) == 0:
         return 0, 0, 0, 0, "none", 0, None, None
-    
+
     landmarks = face_landmarks[0]  # Get first face
-    
+
     # Debug: Check landmark count
     if len(landmarks) < 468:
         print(f"[DEBUG] Insufficient face landmarks: {len(landmarks)}/468")
         return 0, 0, 0, 0, "none", 0, None, None
-    
+
     try:
         # Extract key landmarks
         left_eye = landmarks[FACE_LANDMARKS["left_eye_center"]]
@@ -266,13 +276,13 @@ def calculate_head_metrics_from_face_mesh(face_landmarks):
         forehead = landmarks[FACE_LANDMARKS["forehead"]]
         left_temple = landmarks[FACE_LANDMARKS["left_temple"]]
         right_temple = landmarks[FACE_LANDMARKS["right_temple"]]
-        left_cheek = landmarks[FACE_LANDMARKS["left_cheek"]]   # Use as ear replacement
-        right_cheek = landmarks[FACE_LANDMARKS["right_cheek"]] # Use as ear replacement
-        
+        left_cheek = landmarks[FACE_LANDMARKS["left_cheek"]]  # Use as ear replacement
+        right_cheek = landmarks[FACE_LANDMARKS["right_cheek"]]  # Use as ear replacement
+
         # 1. HEAD TILT: Calculate raw difference using CHEEKS instead of ears
         raw_eye_tilt = left_cheek.y - right_cheek.y  # Positive = tilted left, Negative = tilted right
-        head_tilt_absolute = abs(raw_eye_tilt)   # Always positive for scoring
-        
+        head_tilt_absolute = abs(raw_eye_tilt)  # Always positive for scoring
+
         # Determine tilt direction for debugging
         if abs(raw_eye_tilt) < 0.005:  # Very small difference, consider straight
             tilt_direction = "straight"
@@ -280,31 +290,33 @@ def calculate_head_metrics_from_face_mesh(face_landmarks):
             tilt_direction = "left"
         else:
             tilt_direction = "right"
-        
+
         # 2. HEAD ROTATION: Temple depth difference (left/right turn)
         head_rotation = abs(left_temple.z - right_temple.z)
-        
+
         # 3. FORWARD HEAD LEAN: Nose tip vs nose bridge depth
         # When leaning forward, nose tip comes closer to camera than bridge
         head_forward_lean = nose_bridge.z - nose_tip.z
-        
+
         # 4. Overall face center Z for distance tracking
         face_center_z = (left_eye.z + right_eye.z + nose_tip.z + chin.z) / 4
-        
+
         # 5. LOOKING DOWN DETECTION - Nose to eye center distance
         eye_center_y = (left_eye.y + right_eye.y) / 2
         nose_eye_distance = nose_tip.y - eye_center_y  # Positive when nose is below eyes (looking down)
-        
+
         return head_tilt_absolute, head_rotation, head_forward_lean, face_center_z, tilt_direction, nose_eye_distance, left_cheek, right_cheek
-        
+
     except (IndexError, AttributeError) as e:
         print(f"[DEBUG] Error accessing face landmarks: {e}")
         return 0, 0, 0, 0, "error", 0, None, None
+
 
 drawing_utils = mp.solutions.drawing_utils
 drawing_styles = mp.solutions.drawing_styles
 drawing_connections = mp.solutions.pose.POSE_CONNECTIONS
 default_face_connections_style = mp.solutions.drawing_styles.get_default_face_mesh_tesselation_style()
+
 
 def listen_for_speech():
     global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
@@ -350,6 +362,7 @@ def listen_for_speech():
     except Exception as e:
         print("[ERROR] Microphone failed:", e)
 
+
 def calculate_angle(v1, v2):
     dot = v1[0] * v2[0] + v1[1] * v2[1]
     mag1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
@@ -357,8 +370,10 @@ def calculate_angle(v1, v2):
     angle_rad = math.acos(dot / (mag1 * mag2))
     return math.degrees(angle_rad)
 
+
 def smooth(prev, current, alpha=0.2):
     return (1 - alpha) * prev + alpha * current
+
 
 def normalize_lighting(frame):
     lab = cv.cvtColor(frame, cv.COLOR_BGR2LAB)
@@ -368,12 +383,13 @@ def normalize_lighting(frame):
     merged = cv.merge((cl, a, b))
     return cv.cvtColor(merged, cv.COLOR_LAB2BGR)
 
+
 def draw_landmarks(frame, landmarks_list, connections=None, landmark_style=None):
     if connections is None:
         connections = mp.solutions.pose.POSE_CONNECTIONS
     if landmark_style is None:
         landmark_style = drawing_styles.get_default_pose_landmarks_style()
-        
+
     for i in range(len(landmarks_list)):
         landmarks = landmarks_list[i]
         landmarks_proto = landmark_pb2.NormalizedLandmarkList()
@@ -387,16 +403,17 @@ def draw_landmarks(frame, landmarks_list, connections=None, landmark_style=None)
             landmark_style)
     return frame
 
+
 def scale_metric(value, low_threshold, high_threshold, max_score=3):
     """
     Scale a metric value to a 0-max_score range based on thresholds.
-    
+
     Args:
         value: The metric value to scale
         low_threshold: Below this = score 0
         high_threshold: Above this = max_score
         max_score: Maximum score to return
-    
+
     Returns:
         Integer score from 0 to max_score
     """
@@ -409,6 +426,7 @@ def scale_metric(value, low_threshold, high_threshold, max_score=3):
         ratio = (abs(value) - low_threshold) / (high_threshold - low_threshold)
         return int(ratio * max_score)
 
+
 def analyze_posture(image, pose_landmarks, face_landmarks=None):
     global is_calibrating, calibration_data, calibrated_thresholds, calibration_start_time, mode, countdown_duration, hold_duration, prev_facial_distances, prev_torso_distances, cache_idx
     global start_time, loop_started, last_beep_time
@@ -417,7 +435,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     side_label = ""
     status = "No pose detected"
     color = (128, 128, 128)
-    
+
     # Initialize confidence scores to prevent UnboundLocalError
     head_confidence_score = 0
     body_confidence_score = 0
@@ -428,7 +446,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     right_shoulder = pose_landmarks[PoseLandmark.RIGHT_SHOULDER]
     if left_shoulder.visibility < 0.5 or right_shoulder.visibility < 0.5:
         return status
-        
+
     left_hip = pose_landmarks[PoseLandmark.LEFT_HIP]
     right_hip = pose_landmarks[PoseLandmark.RIGHT_HIP]
     left_ear = pose_landmarks[PoseLandmark.LEFT_EAR]
@@ -439,7 +457,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     right_eye = pose_landmarks[PoseLandmark.RIGHT_EYE]
     mouth_left = pose_landmarks[PoseLandmark.MOUTH_LEFT]
     mouth_right = pose_landmarks[PoseLandmark.MOUTH_RIGHT]
-    
+
     # Calculate averaged positions
     mouth = type(mouth_left)(x=(mouth_left.x + mouth_right.x) / 2,
                              y=(mouth_left.y + mouth_right.y) / 2,
@@ -473,10 +491,11 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 
     torso_distance = np.mean(prev_torso_distances).astype(float)
     facial_distance = np.mean(prev_facial_distances).astype(float)
-    
+
     # Get Face Mesh head metrics (ENHANCED with looking down detection and cheek landmarks)
-    face_tilt, face_rotation, face_lean, face_distance, tilt_direction, nose_eye_distance, left_cheek, right_cheek = calculate_head_metrics_from_face_mesh(face_landmarks)
-    
+    face_tilt, face_rotation, face_lean, face_distance, tilt_direction, nose_eye_distance, left_cheek, right_cheek = calculate_head_metrics_from_face_mesh(
+        face_landmarks)
+
     # NEW: Use Face Mesh cheeks as ear replacements for better accuracy
     if left_cheek is not None and right_cheek is not None:
         # Use Face Mesh cheek landmarks instead of pose ear landmarks
@@ -487,22 +506,26 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
         # Fallback to pose-based ears if Face Mesh fails
         raw_head_tilt = left_ear.y - right_ear.y if left_ear.visibility > 0.5 and right_ear.visibility > 0.5 else 0
         print(f"[DEBUG] Fallback to pose ear landmarks")
-    
+
     head_tilt_difference = abs(raw_head_tilt)
 
     clavicle_length = np.linalg.norm(
         np.array((left_shoulder.x, left_shoulder.y)) - np.array((right_shoulder.x, right_shoulder.y)))
-    
+
     # Calculate shoulder-ear distances using Face Mesh cheeks when available
     if left_cheek is not None and right_cheek is not None:
         # Use Face Mesh cheek landmarks for more accurate shoulder-ear calculations
-        left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y)) - np.array((left_cheek.x, left_cheek.y)))
-        right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_cheek.x, right_cheek.y)))
+        left_shoulder_ear = np.linalg.norm(
+            np.array((left_shoulder.x, left_shoulder.y)) - np.array((left_cheek.x, left_cheek.y)))
+        right_shoulder_ear = np.linalg.norm(
+            np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_cheek.x, right_cheek.y)))
     else:
         # Fallback to pose ear landmarks
-        left_shoulder_ear = np.linalg.norm(np.array((left_shoulder.x, left_shoulder.y)) - np.array((left_ear.x, left_ear.y)))
-        right_shoulder_ear = np.linalg.norm(np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
-    
+        left_shoulder_ear = np.linalg.norm(
+            np.array((left_shoulder.x, left_shoulder.y)) - np.array((left_ear.x, left_ear.y)))
+        right_shoulder_ear = np.linalg.norm(
+            np.array((right_shoulder.x, right_shoulder.y)) - np.array((right_ear.x, right_ear.y)))
+
     avg_shoulder_ear = (left_shoulder_ear + right_shoulder_ear) / 2
 
     face_torso_height = face.y - torso.y
@@ -523,16 +546,16 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             calibration_data["face_torso_heights"].append(face_torso_height)
             calibration_data["shoulder_ear_distance"].append(avg_shoulder_ear)
             calibration_data["clavicle_y"].append(clavicle.y)
-            
+
             # Calibrate Face Mesh baselines
             calibration_data["face_mesh_tilt"].append(face_tilt)
             calibration_data["face_mesh_rotation"].append(face_rotation)
             calibration_data["face_mesh_lean"].append(face_lean)
             calibration_data["face_mesh_distance"].append(face_distance)
-            
+
             # NEW: Calibrate nose-eye distance baseline for looking down detection
             calibration_data["nose_eye_distances"].append(nose_eye_distance)
-            
+
             # Store raw tilt samples using Face Mesh cheeks when available
             if face_landmarks and len(face_landmarks) > 0:
                 landmarks = face_landmarks[0]
@@ -548,27 +571,28 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     right_eye = landmarks[FACE_LANDMARKS["right_eye_center"]]
                     raw_tilt_sample = left_eye.y - right_eye.y
                     calibration_data["raw_eye_tilt_samples"].append(raw_tilt_sample)
-            
+
             cv.putText(image, "CALIBRATING... Hold Good Posture", (30, 150), cv.FONT_HERSHEY_SIMPLEX, 0.7,
                        (0, 255, 255), 2)
             cv.putText(image, "Keep head straight and level!", (30, 175), cv.FONT_HERSHEY_SIMPLEX, 0.5,
                        (0, 255, 255), 1)
         else:
             is_calibrating = False
-            
+
             # Calculate natural tilt baseline from calibration samples
             natural_tilt_baseline = 0
             if calibration_data["raw_eye_tilt_samples"]:
-                natural_tilt_baseline = sum(calibration_data["raw_eye_tilt_samples"]) / len(calibration_data["raw_eye_tilt_samples"])
+                natural_tilt_baseline = sum(calibration_data["raw_eye_tilt_samples"]) / len(
+                    calibration_data["raw_eye_tilt_samples"])
                 tilt_variance = np.var(calibration_data["raw_eye_tilt_samples"])
                 print(f"[CALIBRATION] Natural head tilt baseline: {natural_tilt_baseline:.4f}")
                 print(f"[CALIBRATION] Tilt variance during calibration: {tilt_variance:.6f}")
-            
+
             calibrated_thresholds = {
                 "clavicle_length_threshold": avg("clavicle_lengths") * 0.7,
                 # Face Mesh baselines
                 "face_mesh_tilt_baseline": avg("face_mesh_tilt"),
-                "face_mesh_rotation_baseline": avg("face_mesh_rotation"), 
+                "face_mesh_rotation_baseline": avg("face_mesh_rotation"),
                 "face_mesh_lean_baseline": avg("face_mesh_lean"),
                 "face_mesh_distance_baseline": avg("face_mesh_distance"),
                 # Natural tilt baseline for symmetric detection
@@ -596,12 +620,14 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 
             facial_percentage = (facial_distance - facial_avg) / facial_avg if facial_avg != 0 else 0
             torso_percentage = (torso_distance - torso_avg) / torso_avg if torso_avg != 0 else 0
-            height_percentage = (face_torso_height - face_clav_height_avg) / face_clav_height_avg if face_clav_height_avg != 0 else 0
-            shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
-            
+            height_percentage = (
+                                            face_torso_height - face_clav_height_avg) / face_clav_height_avg if face_clav_height_avg != 0 else 0
+            shoulder_ear_percentage = (
+                                                  avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
+
             # NEW: Looking down percentage using same pattern as other metrics
             looking_down_percentage = (nose_eye_distance - nose_eye_avg) / nose_eye_avg if nose_eye_avg != 0 else 0
-            
+
             # ENHANCED: More responsive clavicle Y-drop detection
             clavicle_y_pct = (clavicle.y - clavicle_y_baseline) / clavicle_y_baseline if clavicle_y_baseline != 0 else 0
             # Also check absolute drop to catch cases where baseline calibration was poor
@@ -609,39 +635,43 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 
             # FIXED: Proper symmetric head tilt calculation with baseline normalization
             head_tilt_baseline = calibrated_thresholds.get("head_tilt_baseline", 0)
-            normalized_head_tilt = abs(raw_head_tilt - head_tilt_baseline)  # Remove baseline bias and use absolute value
-            
+            normalized_head_tilt = abs(
+                raw_head_tilt - head_tilt_baseline)  # Remove baseline bias and use absolute value
+
             # Head-specific metrics (only head position and tilt)
             head_forward_score = scale_metric(facial_percentage, 0.08, 0.25, 3)  # Slightly more sensitive
-            head_tilt_score = scale_metric(normalized_head_tilt, 0.02, 0.08, 3)   # More sensitive with proper normalization
-            
+            head_tilt_score = scale_metric(normalized_head_tilt, 0.02, 0.08,
+                                           3)  # More sensitive with proper normalization
+
             # NEW: Looking down score using same scale_metric function
             looking_down_score = scale_metric(looking_down_percentage, 0.40, 0.60, 4)  # 15%-40% change triggers penalty
-            
+
             head_confidence_score = min(head_forward_score + head_tilt_score + looking_down_score, 7)
 
             # Debug head tilt when significant (now using Face Mesh cheeks)
             if normalized_head_tilt > 0.03:
                 tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
-                landmark_source = "Face Mesh cheeks" if (left_cheek is not None and right_cheek is not None) else "Pose ears"
+                landmark_source = "Face Mesh cheeks" if (
+                            left_cheek is not None and right_cheek is not None) else "Pose ears"
                 print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
                       f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
                       f"Source: {landmark_source}, Score: {head_tilt_score}/3")
 
             # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
-            torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)      
-            shoulder_drop_score = scale_metric(shoulder_ear_percentage, 0.08, 0.20, 2)  
-            
+            torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)
+            shoulder_drop_score = scale_metric(shoulder_ear_percentage, 0.08, 0.20, 2)
+
             # ENHANCED: Much more sensitive and weighted clavicle drop detection
             posture_drop_score_pct = scale_metric(clavicle_y_pct, 0.005, 0.03, 4)  # Very sensitive: 0.5%-3%
             posture_drop_score_abs = scale_metric(absolute_clavicle_drop, 0.01, 0.05, 4)  # Absolute threshold
             # Take the maximum of both methods for best detection
             posture_drop_score = min(max(posture_drop_score_pct, posture_drop_score_abs), 4)
-            
-            body_alignment_score = scale_metric(height_percentage, 0.08, 0.20, 1) 
-            
+
+            body_alignment_score = scale_metric(height_percentage, 0.08, 0.20, 1)
+
             # ENHANCED: Give clavicle drop much more weight in final calculation
-            body_confidence_score = min(torso_lean_score + shoulder_drop_score + body_alignment_score + posture_drop_score, 7)
+            body_confidence_score = min(
+                torso_lean_score + shoulder_drop_score + body_alignment_score + posture_drop_score, 7)
 
             # Combine scores with clear weighting, but boost clavicle impact
             base_combined = int((head_confidence_score * 0.5 + body_confidence_score * 0.5))
@@ -657,15 +687,15 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 
             # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(combined_confidence, 7)
-            
+
             # Use stable posture for alert logic (prevents false alarms)
             stable_confidence = 1 if stable_posture == "good" else (3 if stable_posture == "moderate" else 5)
 
-            #integration for the data logging
+            # integration for the data logging
             status = display_status
             color = posture_status_labels[stable_posture][1]
 
-            #auto dataset logger(logs once every 5 seconds)
+            # auto dataset logger(logs once every 5 seconds)
             global last_logged_time
             current_time = time.time()
             if not is_manual_labeling and current_time - last_logged_time >= 5:
@@ -677,7 +707,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     "torso_lean_prc": torso_percentage,
                     "looking_down_pct": looking_down_percentage
                 }
-                #global latest_features
+                # global latest_features
                 global latest_features
                 latest_features = features
                 log_posture_sample(features, stable_posture)
@@ -697,17 +727,17 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     "looking_down_pct": looking_down_percentage
                 }
                 latest_features = voice_features
-                log_posture_sample(voice_features, latest_voice_label,frame=image)
+                log_posture_sample(voice_features, latest_voice_label, frame=image)
                 print(f"[VOICE] Logged {latest_voice_label.upper()} posture sample via voice.")
                 last_logged_time = current_time
                 last_voice_log_time = current_time
                 latest_voice_label = None
 
-            
             # Alert logic (using stable confidence to prevent false alarms)
             alert_threshold = 3
 
-            if (stable_confidence >= alert_threshold or head_confidence_score >= alert_threshold) and not is_transitioning:
+            if (
+                    stable_confidence >= alert_threshold or head_confidence_score >= alert_threshold) and not is_transitioning:
                 if start_time is None:
                     start_time = time.time()
                 else:
@@ -748,15 +778,16 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 side_label = "Left Side View (Face Mesh)" if left_cheek is not None else "Left Side View (Pose)"
 
             shoulder_ear_avg = avg("shoulder_ear_distance")
-            shoulder_ear_percentage = (avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
-            
+            shoulder_ear_percentage = (
+                                                  avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
+
             # Side-specific confidence scoring
             forward_head_score = scale_metric(shoulder_ear_percentage, 0.08, 0.25, 7)  # Use full 0-7 range
             side_confidence_score = forward_head_score
 
-            # Get simplified status using stability system  
+            # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(side_confidence_score, 7)
-            
+
             # Set display values
             status = display_status
             color = posture_status_labels[stable_posture][1]
@@ -772,10 +803,11 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     # Return status for GUI
     return status
 
+
 # Move the main execution code into a separate function
 def run_standalone():
     """Run the standalone version with OpenCV window"""
-    
+
     # Define and start speech recognition thread only in standalone mode
     def listen_for_speech():
         global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
@@ -838,7 +870,7 @@ def run_standalone():
         base_options=base_face_options,
         running_mode=mp.tasks.vision.RunningMode.VIDEO,
         min_face_detection_confidence=0.5,  # Lowered from 0.7 for better detection
-        min_tracking_confidence=0.5)        # Lowered from 0.7 for better detection
+        min_tracking_confidence=0.5)  # Lowered from 0.7 for better detection
 
     cap = cv.VideoCapture(0)
     cv.namedWindow('Posture Detection')
@@ -860,7 +892,8 @@ def run_standalone():
                 face_results = face_landmarker.detect_for_video(face_image, timestamp)
                 annotated_image = np.copy(frame)
 
-                draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS, drawing_styles.get_default_pose_landmarks_style())
+                draw_landmarks(annotated_image, pose_results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
+                               drawing_styles.get_default_pose_landmarks_style())
 
                 if pose_results.pose_landmarks:
                     analyze_posture(annotated_image, pose_results.pose_landmarks[0], face_results.face_landmarks)
@@ -870,7 +903,7 @@ def run_standalone():
                 key = cv.waitKey(5) & 0xFF
                 if key == 27:
                     break
-                #keys for the manual data logging
+                # keys for the manual data logging
                 elif key == ord('l'):
                     is_manual_labeling = not is_manual_labeling
                     print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
@@ -923,6 +956,7 @@ def run_standalone():
     cap.release()
     cv.destroyAllWindows()
 
+
 # Add a flag to prevent any background speech recognition in GUI mode
 _gui_mode = False
 
@@ -930,7 +964,7 @@ def update_notification_volume(volume):
     global notification_volume
     notification_volume = volume
     beep.set_volume(volume / 100.0)  # Convert to pygame's 0.0-1.0 range
-    # print(f"Notification volume set to {volume}%") Here for temporary debugging. Not advised due to log spam
+    print(f"Notification volume set to {volume}%")
 
 def update_beep_interval(interval):
     global beep_interval
@@ -948,9 +982,11 @@ def set_gui_mode(enabled=True):
     _gui_mode = enabled
     print(f"[BACKEND] GUI mode: {enabled}")
 
+
 def is_gui_mode():
     """Check if we're in GUI mode"""
     return _gui_mode
+
 
 # Only run standalone if this file is executed directly
 if __name__ == "__main__":
