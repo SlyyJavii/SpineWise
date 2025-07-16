@@ -593,9 +593,32 @@ class App(QMainWindow):
         
 
     def init_settings_tab(self):
+        pixel_font = QFont("Press Start 2P", 10)
+        pixel_font.setStyleStrategy(QFont.NoAntialias)
+
         layout = QVBoxLayout()
 
-        notif_group = QGroupBox("Notification Settings")
+        #notif_group = QGroupBox("Notification Settings")
+        notif_group = QGroupBox()
+        notif_group.setTitle("Notification Settings")
+        notif_group.setFont(pixel_font)
+        notif_group.setStyleSheet("""
+            QGroupBox {
+                font-family: "Press Start 2P";
+                font-size: 10px;
+                color: black;
+                border: 2px solid black;
+                border-radius: 5px;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+
+
         notif_layout = QFormLayout()
 
         # Volume Control
@@ -610,7 +633,18 @@ class App(QMainWindow):
         volume_layout = QHBoxLayout()
         volume_layout.addWidget(self.volume_slider)
         volume_layout.addWidget(self.volume_label)
-        notif_layout.addRow("Notification Volume:", volume_layout)
+        notif_label1 = QLabel("Notification Volume:")
+        notif_label1.setFont(pixel_font)
+        notif_layout.addRow(notif_label1, volume_layout)
+        self.volume_label.setFont(pixel_font)
+        self.volume_label.setStyleSheet(""" 
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            background-color: white;
+            border: 2px solid black;
+            padding: 4px;
+        """)
 
         # Beep Interval Control
         self.beep_interval_spinbox = QDoubleSpinBox()
@@ -619,7 +653,19 @@ class App(QMainWindow):
         self.beep_interval_spinbox.setValue(self.beep_interval)
         self.beep_interval_spinbox.setSuffix(" seconds")
         self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
-        notif_layout.addRow("Beep Interval:", self.beep_interval_spinbox)
+        notif_label2 = QLabel("Beep Interval:")
+        notif_label2.setFont(pixel_font)
+        notif_layout.addRow(notif_label2, self.beep_interval_spinbox)
+        # Apply pixel font and black styling to beep interval spinbox
+        self.beep_interval_spinbox.setFont(pixel_font)
+        self.beep_interval_spinbox.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            ackground-color: white;
+            border: 2px solid black;
+            padding: 4px;
+        """)
 
         # Alert Duration Control
         self.alert_duration_spinbox = QSpinBox()
@@ -627,10 +673,22 @@ class App(QMainWindow):
         self.alert_duration_spinbox.setValue(int(self.alert_duration))
         self.alert_duration_spinbox.setSuffix(" seconds")
         self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
-        notif_layout.addRow("Alert Duration:", self.alert_duration_spinbox)
-
+        notif_label3 = QLabel("Alert Duration:")
+        notif_label3.setFont(pixel_font)
+        notif_layout.addRow(notif_label3, self.alert_duration_spinbox)
         notif_group.setLayout(notif_layout)
         layout.addWidget(notif_group)
+        # Apply pixel font and black styling to alert duration spinbox
+        self.alert_duration_spinbox.setFont(pixel_font)
+        self.alert_duration_spinbox.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            background-color: white;
+            border: 2px solid black;
+            padding: 4px;
+        """)
+
 
         # Add some spacing
         layout.addStretch()
