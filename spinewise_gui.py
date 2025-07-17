@@ -631,17 +631,29 @@ class App(QMainWindow):
             }
         """)
         visual_layout = QFormLayout()
-
-
+        # Pixel font
+        pixel_font = QFont("Press Start 2P", 10)
+        pixel_font.setStyleStrategy(QFont.NoAntialias)
         #landmark toggle
         self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed")
+        self.landmark_checkbox.setFont(pixel_font)
         self.landmark_checkbox.setChecked(self.show_landmarks)
         self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
-        visual_layout.addRow("Landmarks:", self.landmark_checkbox)
 
-         #info about the landmark toggle
+        landmark_label = QLabel("Landmarks:")
+        landmark_label.setFont(pixel_font)
+        visual_layout.addRow(landmark_label, self.landmark_checkbox)
+
+
+         # info about the landmark toggle
         landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed")
-        landmark_info.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
+        landmark_info.setFont(pixel_font)
+        landmark_info.setStyleSheet("""
+            font-size: 10px;
+            color: #333;
+            font-style: italic;
+            font-family: "Press Start 2P";
+        """)
         visual_layout.addRow("", landmark_info)
 
         visual_group.setLayout(visual_layout)
@@ -745,9 +757,25 @@ class App(QMainWindow):
         layout.addStretch()
 
         # Voice Control Section
-        voice_section = QLabel("🎤 Voice Control Settings")
-        voice_section.setFont(QFont("Times New Roman", 14, QFont.Bold))
-        layout.addWidget(voice_section)
+        voice_group = QGroupBox("🎤 Voice Control Settings")
+        voice_group.setFont(pixel_font)  # reuse your pixel font
+        voice_group.setStyleSheet("""
+            QGroupBox {
+                    font-family: "Press Start 2P";
+                    font-size: 10px;
+                    color: black;
+                    border: 2px solid black;
+                    border-radius: 5px;
+                    margin-top: 20px;
+                    background-color: rgba(200, 200, 200, 160);  /* Light gray with transparency */
+                }
+            QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+            }
+        """)    
+        voice_layout = QVBoxLayout()
 
         # Voice enable/disable
         self.voice_checkbox = QCheckBox("Enable Voice Commands")
@@ -784,7 +812,11 @@ Note: Enable voice commands with the checkbox above first.
         """)
         voice_help.setWordWrap(True)
         voice_help.setStyleSheet("padding: 15px; background-color: #e8f4fd; border-radius: 5px; font-size: 11px;")
-        layout.addWidget(voice_help)
+        #layout.addWidget(voice_help)
+        voice_layout.addWidget(self.voice_checkbox)
+        voice_layout.addWidget(voice_help)
+        voice_group.setLayout(voice_layout)
+        layout.addWidget(voice_group)
 
         layout.addWidget(QLabel(""))  # Spacer
 
@@ -924,7 +956,7 @@ Note: Enable voice commands with the checkbox above first.
 
         # HELP COMMAND
         elif any(word in ["help", "commands", "what", "options"] for word in words):
-            print("[VOICE] ✅ Help command detected")
+            print("[VOICE] Help command detected")
             self.stats_display.setText("🎤 Commands: 'start' (camera), 'stop' (camera), 'cal' (calibrate), 'exit' (app)")
 
         else:
