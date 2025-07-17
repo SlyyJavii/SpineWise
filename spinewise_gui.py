@@ -383,9 +383,11 @@ class App(QMainWindow):
 
 
         # Initialize threads
+        self.show_landmarks = False
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
+
 
         self.speech_thread = SpeechRecognitionThread()
         self.speech_thread.command_detected.connect(self.handle_voice_command)
@@ -394,7 +396,7 @@ class App(QMainWindow):
         self.notification_volume = 50
         self.beep_interval = 2.0
         self.alert_duration = 10.0
-        self.show_landmarks = False
+        
 
         # Then initialize tabs
         self.init_live_tab()
@@ -604,12 +606,32 @@ class App(QMainWindow):
     def init_settings_tab(self):
         pixel_font = QFont("Press Start 2P", 10)
         pixel_font.setStyleStrategy(QFont.NoAntialias)
+        
+
 
         layout = QVBoxLayout()
 
           #visual settings group
         visual_group = QGroupBox("Visual Settings")
+        visual_group.setFont(pixel_font)  # Apply your pixel-style font
+        visual_group.setStyleSheet("""
+            QGroupBox {
+                font-family: "Press Start 2P";
+                font-size: 10px;
+                color: black;
+                border: 2px solid black;
+                border-radius: 5px;
+                margin-top: 10px;
+                background-color: rgba(200, 200, 200, 160);  /* Transparent light gray */
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
         visual_layout = QFormLayout()
+
 
         #landmark toggle
         self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed")
@@ -637,6 +659,7 @@ class App(QMainWindow):
                 border: 2px solid black;
                 border-radius: 5px;
                 margin-top: 10px;
+                background-color: rgba(200, 200, 200, 160);  /* Light gray with transparency */
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -644,6 +667,7 @@ class App(QMainWindow):
                 padding: 0 5px;
             }
         """)
+        self.settings_tab.setStyleSheet("background-color: transparent;")
 
 
         notif_layout = QFormLayout()
@@ -1044,10 +1068,11 @@ Note: Enable voice commands with the checkbox above first.
 
         # Create a completely new video thread
         print("[INFO] Creating new video thread...")
-        self.video_thread = VideoThread()
-        self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
+        self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
+
+
 
         # Start the new thread
         self.video_thread.start()
