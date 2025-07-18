@@ -14,7 +14,7 @@ import speech_recognition as sr
 
 
 from PyQt5.QtWidgets import (
-    QLabel, QPushButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
+    QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
     QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget, QGridLayout,QHeaderView
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
@@ -1259,11 +1259,115 @@ class App(QMainWindow):
         """)
 
         # Inner header layout for close + title
-        header_layout = QHBoxLayout()
-        header_layout.addWidget(self.devs_title, alignment=Qt.AlignLeft)
-        header_layout.addStretch()
-        header_layout.addWidget(self.close_button, alignment=Qt.AlignRight)
+        # Centered title with close button on top-right
+        header_layout = QGridLayout()
+
+        # Place title in center column
+        header_layout.addWidget(self.devs_title, 0, 1, alignment=Qt.AlignHCenter)
+
+        # Place close button in top-right corner
+        header_layout.addWidget(self.close_button, 0, 2, alignment=Qt.AlignRight)
+
+        # Add stretch in first column to push title to center
+        header_layout.setColumnStretch(0, 1)
+        header_layout.setColumnStretch(1, 2)
+        header_layout.setColumnStretch(2, 1)
+
         popup_layout.addLayout(header_layout)
+        # --- Carousel Setup ---
+        self.carousel_widget = QStackedWidget()
+        self.carousel_widget.setFixedHeight(300)  # Adjust as needed
+
+        devs_info = [
+            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png"),
+            ("Juan Mieses", "Fullstack Development ", "assets/dev2.png"),
+            ("Javier Brasil", "Fullstack Development", "assets/dev3.png"),
+            ("John Pena ", "Machine Learning Developer and Backend ", "assets/dev4.png"),
+            ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png"),
+        ]
+
+        # Create dev cards
+        for name, role, img_path in devs_info:
+            card = QWidget()
+            card_layout = QVBoxLayout(card)
+            card_layout.setAlignment(Qt.AlignCenter)
+            card.setStyleSheet("""
+                background-color: white;
+                border: 2px solid black;
+                border-radius: 12px;
+            """)
+            image = QLabel()
+            image.setPixmap(QPixmap(img_path).scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            image.setAlignment(Qt.AlignCenter)
+
+            name_label = QLabel(name)
+            name_label.setFont(QFont("Press Start 2P", 10))
+            name_label.setAlignment(Qt.AlignCenter)
+            name_label.setStyleSheet("color: black;")
+
+            role_label = QLabel(role)
+            role_label.setFont(QFont("Press Start 2P", 8))
+            role_label.setAlignment(Qt.AlignCenter)
+            role_label.setStyleSheet("color: gray;")
+
+            card_layout.addWidget(image)
+            card_layout.addWidget(name_label)
+            card_layout.addWidget(role_label)
+            self.carousel_widget.addWidget(card)
+
+        popup_layout.addWidget(self.carousel_widget)
+
+        # --- Navigation + Pagination ---
+        nav_layout = QHBoxLayout()
+        nav_layout.setAlignment(Qt.AlignCenter)
+
+        # Left Arrow
+        left_btn = QPushButton("◀")
+        left_btn.setFixedSize(30, 30)
+        left_btn.setStyleSheet("font-size: 18px; border: none; background-color: #ccc; border-radius: 15px;")
+        left_btn.clicked.connect(lambda: self.carousel_widget.setCurrentIndex((self.carousel_widget.currentIndex() - 1) % self.carousel_widget.count()))
+        nav_layout.addWidget(left_btn)
+
+        # Pagination Dots
+        dot_group = QButtonGroup()
+        self.pagination_dots = []
+
+        for i in range(len(devs_info)):
+            dot = QRadioButton()
+            dot.setStyleSheet("""
+                QRadioButton::indicator {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background-color: #ccc;
+                }
+                QRadioButton::indicator:checked {
+                    background-color: black;
+                }
+            """)
+            dot.toggled.connect(lambda checked, idx=i: self.carousel_widget.setCurrentIndex(idx) if checked else None)
+            dot_group.addButton(dot)
+            self.pagination_dots.append(dot)
+            nav_layout.addWidget(dot)
+
+        # Right Arrow
+        right_btn = QPushButton("▶")
+        right_btn.setFixedSize(30, 30)
+        right_btn.setStyleSheet("font-size: 18px; border: none; background-color: #ccc; border-radius: 15px;")
+        right_btn.clicked.connect(lambda: self.carousel_widget.setCurrentIndex((self.carousel_widget.currentIndex() + 1) % self.carousel_widget.count()))
+        nav_layout.addWidget(right_btn)
+
+        popup_layout.addLayout(nav_layout)
+
+        # Set first dot checked
+        self.pagination_dots[0].setChecked(True)
+
+        # Sync dot selection with carousel change
+        def sync_dots(index):
+            self.pagination_dots[index].setChecked(True)
+
+        self.carousel_widget.currentChanged.connect(sync_dots)
+
 
         # TODO: Add more content here if desired
         content_label = QLabel(" This popup will hold team info or credits.")
@@ -1291,7 +1395,6 @@ class App(QMainWindow):
 
 
     
-
     def clear_log(self):
         try:
             if os.path.exists("posture_trend_log.csv"):
