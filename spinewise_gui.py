@@ -17,8 +17,8 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
     QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView
 )
-from PyQt5.QtGui import QImage, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
-from PyQt5.QtCore import Qt, QThread, QSize, pyqtSignal, QTimer
+from PyQt5.QtGui import QImage, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
+from PyQt5.QtCore import Qt, QThread, QSize, pyqtSignal, QEvent, QTimer
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker,
     draw_landmarks, normalize_lighting, is_calibrating,
@@ -416,6 +416,7 @@ class App(QMainWindow):
         palette.setBrush(QPalette.Window, QBrush(scaled))
         self.setPalette(palette)
         super().resizeEvent(event)
+    
 
 
     def init_live_tab(self):
@@ -426,6 +427,20 @@ class App(QMainWindow):
         layout = QVBoxLayout(live_wrapper)
         pixel_font = QFont("Press Start 2P", 10)
         pixel_font.setStyleStrategy(QFont.NoAntialias)
+
+        # Create folder QLabel
+        self.folder_icon = QLabel()
+        self.folder_icon.setPixmap(QPixmap("assets/icons/folder_closed.png"))
+        self.folder_icon.setFixedSize(48, 48)
+        self.folder_icon.setScaledContents(True)
+        self.folder_icon.setCursor(Qt.PointingHandCursor)
+
+        # Enable hover tracking
+        self.folder_icon.setAttribute(Qt.WA_Hover, True)
+        self.folder_icon.installEventFilter(self)
+
+        # Add it to your layout (e.g., top-left corner or any layout you want)
+        layout.addWidget(self.folder_icon)
 
 
         # Title
@@ -1350,6 +1365,15 @@ class App(QMainWindow):
         """Check if the app is still running after stop command"""
         print("[DEBUG] App status check - if you see this, the app is still running!")
         self.stats_display.setText("⏹️ Camera stopped - App is running normally")
+    
+    def eventFilter(self, source, event):
+        if source == self.folder_icon:
+            if event.type() == QEvent.Enter:
+                self.folder_icon.setPixmap(QPixmap("assets/icons/folder_open.png"))
+            elif event.type() == QEvent.Leave:
+                self.folder_icon.setPixmap(QPixmap("assets/icons/folder_closed.png"))
+        return super().eventFilter(source, event)
+
 
     def update_image(self, qt_image):
         pixmap = QPixmap.fromImage(qt_image)
