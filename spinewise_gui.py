@@ -452,7 +452,7 @@ class App(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("""
             color: black;
-            ont-weight: normal;
+            font-weight: normal;
             padding: 10px;
         """)
 
@@ -1276,14 +1276,15 @@ class App(QMainWindow):
         popup_layout.addLayout(header_layout)
         # --- Carousel Setup ---
         self.carousel_widget = QStackedWidget()
-        self.carousel_widget.setFixedHeight(300)  # Adjust as needed
+        self.carousel_widget.setFixedHeight(int(self.height() * 0.6))  # ~60% of popup height
+  # Adjust as needed
 
         devs_info = [
-            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdyapermuy/"),
-            ("Juan Mieses", "Fullstack Development ", "assets/dev2.png", "https://www.linkedin.com/in/juanmieses003/"),
-            ("Javier Brasil", "Fullstack Development", "assets/dev3.png", "https://www.linkedin.com/in/javier-a-brasil/"),
-            ("John Pena ", "Machine Learning Developer and Backend ", "assets/dev4.png", "https://www.linkedin.com/in/johnpenacs/"),
-            ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png", "https://www.linkedin.com/in/jake-rodriguez-917a24142/"),
+            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdyapermuy/", "https://github.com/Emdya"),
+            ("Juan Mieses", "Fullstack Development ", "assets/dev2.png", "https://www.linkedin.com/in/juanmieses003/", "https://github.com/Jmies-27"),
+            ("Javier Brasil", "Fullstack Development", "assets/dev3.png", "https://www.linkedin.com/in/javier-a-brasil/", "https://github.com/SlyyJavii"),
+            ("John Pena ", "Machine Learning Developer and Backend ", "assets/dev4.png", "https://www.linkedin.com/in/johnpenacs/", "https://github.com/jpena173"),
+            ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png", "https://www.linkedin.com/in/jake-rodriguez-917a24142/","https://github.com/jrodr995"),
         ]
 
         captions = [
@@ -1295,9 +1296,11 @@ class App(QMainWindow):
         ]
 
         # Create dev cards
-        for index, (name, role, img_path, linkedin) in enumerate(devs_info):
+        for index, (name, role, img_path, linkedin, github) in enumerate(devs_info):
             card = QWidget()
             card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(30, 10, 30, 10)  # Add breathing room horizontally
+            card_layout.setSpacing(12)
             card_layout.setAlignment(Qt.AlignCenter)
             card.setStyleSheet("""
                 background-color: white;
@@ -1305,25 +1308,49 @@ class App(QMainWindow):
                 border-radius: 12px;
             """)
             image = QLabel()
-            image.setPixmap(QPixmap(img_path).scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            image.setPixmap(QPixmap(img_path).scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             image.setAlignment(Qt.AlignCenter)
             card_layout.addWidget(image)
 
             # Name
             name_label = QLabel(name)
-            name_label.setFont(QFont("Press Start 2P", 10))
+            name_label.setFont(QFont("Press Start 2P", 12))
             name_label.setAlignment(Qt.AlignCenter)
-            name_label.setStyleSheet("color: black;")
+            name_label.setStyleSheet("color: black; padding: 8px")
             card_layout.addWidget(name_label)
-
+            #
             # Role + LinkedIn icon side-by-side
+            # Role + GitHub + LinkedIn icon layout
             role_row = QHBoxLayout()
             role_row.setAlignment(Qt.AlignCenter)
 
-            role_label = QLabel(role)
-            role_label.setFont(QFont("Press Start 2P", 8))
-            role_label.setStyleSheet("color: gray;")
+            # GitHub Button (LEFT of role)
+            github_button = QPushButton()
+            github_button.setCursor(Qt.PointingHandCursor)
+            github_button.setIcon(QIcon("assets/icons/GitHub_Invertocat_Dark.png"))  
+            github_button.setIconSize(QSize(20, 20))
+            github_button.setFixedSize(28, 28)
+            github_button.setStyleSheet("""
+                QPushButton {
+                    background-color: transparent;
+                    border: none;
+                    margin-right: 8px;
+                }
+                QPushButton:hover {
+                    background-color: #e6e6e6;
+                    border-radius: 6px;
+                }
+            """)
+            github_button.clicked.connect(lambda _, url=github: QDesktopServices.openUrl(QUrl(url)))
+            role_row.addWidget(github_button)
 
+            # Role Label
+            role_label = QLabel(role)
+            role_label.setFont(QFont("Press Start 2P", 10))
+            role_label.setStyleSheet("color: gray;")
+            role_row.addWidget(role_label)
+
+            # LinkedIn Button (RIGHT of role)
             linkedin_button = QPushButton()
             linkedin_button.setCursor(Qt.PointingHandCursor)
             linkedin_button.setIcon(QIcon("assets/icons/LinkedIn_logo_initials.png"))
@@ -1341,19 +1368,39 @@ class App(QMainWindow):
                 }
             """)
             linkedin_button.clicked.connect(lambda _, url=linkedin: QDesktopServices.openUrl(QUrl(url)))
-
-            role_row.addWidget(role_label)
             role_row.addWidget(linkedin_button)
+
+            #
 
             card_layout.addLayout(role_row)
             # Caption section
             caption_label = QLabel(captions[index])
-            caption_label.setFont(QFont("Press Start 2P", 7))
-            caption_label.setStyleSheet("color: #333; padding-top: 6px;")
+            caption_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            caption_label.setMinimumWidth(int(self.width() * 0.7))  # Stretch ~70% of popup width
+            caption_label.setMaximumWidth(int(self.width() * 0.85))  # Prevent it from being too wide
+            caption_label.setFont(QFont("Press Start 2P", 9))
+            caption_label.setTextFormat(Qt.RichText)
+            caption_label.setText(f"""
+                <div style='
+                    line-height: 140%;
+                    letter-spacing: 1.2px;
+                    word-spacing: 4px;
+                    padding: 12px 24px;
+                    color: #333;
+                    font-family: "Press Start 2P";
+                    font-size: 10px;
+                    text-align: center;
+                '>
+                    {captions[index]}
+                </div>
+            """)
+
             caption_label.setAlignment(Qt.AlignCenter)
             caption_label.setWordWrap(True)
 
             card_layout.addWidget(caption_label)
+
+            
 
             self.carousel_widget.addWidget(card)
             
