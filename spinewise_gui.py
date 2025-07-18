@@ -758,113 +758,165 @@ class App(QMainWindow):
         layout.addStretch()
 
         # Voice Control Section
-        voice_group = QGroupBox("🎤 Voice Control Settings")
-        voice_group.setFont(pixel_font)  # reuse your pixel font
-        voice_group.setStyleSheet("""
-            QGroupBox {
-                    font-family: "Press Start 2P";
-                    font-size: 10px;
-                    color: black;
-                    border: 2px solid black;
-                    border-radius: 5px;
-                    margin-top: 20px;
-                    background-color: rgba(200, 200, 200, 160);  /* Light gray with transparency */
-                }
-            QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 5px;
-            }
-        """)    
-        voice_layout = QVBoxLayout()
-
-        # Voice enable/disable
-        self.voice_checkbox = QCheckBox("Enable Voice Commands")
-        self.voice_checkbox.setChecked(False)  # Start disabled
-        self.voice_checkbox.stateChanged.connect(self.toggle_voice_recognition)
-        self.voice_checkbox.setStyleSheet("font-size: 12px; padding: 5px;")
-        layout.addWidget(self.voice_checkbox)
-        
-        # Voice commands help
-        voice_help = QLabel("""
-Voice Commands Available:
-• "start" → Start camera feed (app stays open)
-• "stop" → Stop camera feed (app stays open) 
-• "cal" or "collab" → Start posture calibration
-• "exit" or "quit" → Close entire application
-
-Camera Control:
-• "stop" only turns off camera - you can say "start" to turn it back on
-• App keeps running in background when camera is stopped
-• Only "exit" will close the entire application
-
-Speech Tips:
-• Use "stop" to pause camera, "exit" to close app
-• "cal" works better than "calibrate" for speech recognition
-• Wait for "Listening..." before speaking
-• Speak clearly at normal volume
-
-Recognition Examples:
-• "stop" → Camera off, app running 
-• "start" → Camera on   
-• "exit" → Close everything 
-
-Note: Enable voice commands with the checkbox above first.
-        """)
-        voice_help.setWordWrap(True)
-        voice_help.setStyleSheet("""
+        #  Section Label (outside the box)
+        voice_section_label = QLabel("🎤 Voice Control Settings")
+        voice_section_label.setFont(pixel_font)
+        voice_section_label.setStyleSheet("""
             font-family: "Press Start 2P";
             font-size: 10px;
             color: black;
-            padding: 10px;
-            background-color: white;
-            border: 2px solid black;
-            border-radius: 6px;
+            margin-top: 10px;
+            margin-bottom: 2px;
+            padding-left: 10px;
         """)
-        # Wrap it in a scroll area
-        voice_help_scroll = QScrollArea()
-        voice_help_scroll.setWidgetResizable(True)
-        voice_help_scroll.setFixedHeight(180)  # Adjust based on visual space
-        voice_help_scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-            }
-            QScrollBar:vertical {
-                width: 12px;
-                background: rgba(220, 220, 220, 100);
-            }
-            QScrollBar::handle:vertical {
-                background: #444;
-                border-radius: 6px;
-            }
-        """)
-        voice_help_scroll.setWidget(voice_help)
+        layout.addWidget(voice_section_label)
 
-        # Add to the voice layout
+        # 📦 Container Box for Voice Controls (no title)
+        voice_group = QGroupBox()
+        voice_group.setStyleSheet("""
+            QGroupBox {
+                border: 2px solid black;
+                border-radius: 5px;
+                background-color: rgba(200, 200, 200, 160);
+                margin-top: 0px;
+            }
+        """)
+        voice_layout = QVBoxLayout()
+
+        #  Checkbox (with pixel font)
+        self.voice_checkbox = QCheckBox("Enable Voice Commands")
+        self.voice_checkbox.setFont(pixel_font)
+        self.voice_checkbox.setChecked(False)
+        self.voice_checkbox.stateChanged.connect(self.toggle_voice_recognition)
+        self.voice_checkbox.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            padding: 5px;
+        """)
         voice_layout.addWidget(self.voice_checkbox)
-        voice_layout.addWidget(voice_help_scroll)   
-        voice_help.setFont(pixel_font)
-        voice_layout.addWidget(self.voice_checkbox)
-        voice_layout.addWidget(voice_help)
+
+        #  Voice Commands Info Block
+        voice_help_group = QGroupBox("Voice Commands Available")
+        voice_help_group.setFont(pixel_font)
+        voice_help_group.setStyleSheet("""
+            QGroupBox {
+                font-family: "Press Start 2P";
+                font-size: 10px;
+                color: black;
+                border: 2px solid black;
+                border-radius: 6px;
+                background-color: rgba(200, 200, 200, 160);
+            }
+            QGroupBox::title {
+                subcontrol-origin: content;
+                subcontrol-position: top left;
+                left: 6px;
+                top: -2px;
+                padding: 0px 4px;
+            }
+        """)
+
+        voice_help_label = QLabel("""
+        Camera Control:
+        • "stop" only turns off camera – you can say "start" to turn it back on
+        • App keeps running in background when camera is stopped
+        • Only "exit" will close the entire application
+
+        Speech Tips:
+        • Use "stop" to pause camera, "exit" to close app
+        • "cal" works better than "calibrate" for speech recognition
+        • Wait for "Listening..." before speaking
+        • Speak clearly at normal volume
+
+        Recognition Examples:
+        • "stop" → Camera off, app running
+        • "start" → Camera on
+        • "exit" → Close everything
+
+        Note: Enable voice commands with the checkbox above first.
+        """)
+        voice_help_label.setFont(pixel_font)
+        voice_help_label.setWordWrap(True)
+        voice_help_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        voice_help_label.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            background-color: transparent;
+            padding: 10px;
+        """)
+
+        voice_help_layout = QVBoxLayout()
+        voice_help_layout.addWidget(voice_help_label)
+        voice_help_group.setLayout(voice_help_layout)
+
+        voice_layout.addWidget(voice_help_group)
         voice_group.setLayout(voice_layout)
+
+        # Add the voice section to main layout
         layout.addWidget(voice_group)
+
+            
 
         layout.addWidget(QLabel(""))  # Spacer
 
-        # Data Management Section
+        # Data Management Section (Pixel Aesthetic)
         data_section = QLabel("📁 Data Management")
-        data_section.setFont(QFont("Arial", 14, QFont.Bold))
+        data_section.setFont(pixel_font)
+        data_section.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 12px;
+            color: black;
+            padding: 8px;
+            background-color: rgba(255, 255, 255, 200);
+            border: 2px solid black;
+            border-radius: 10px;
+            margin-top: 20px;
+        """)
         layout.addWidget(data_section)
-
         data_btn_layout = QHBoxLayout()
+        
 
         export_button = QPushButton("💾 Export Log as CSV")
         export_button.clicked.connect(self.export_log)
         data_btn_layout.addWidget(export_button)
+        export_button.setFont(pixel_font)
+        export_button.setStyleSheet("""
+            QPushButton {
+                font-family: "Press Start 2P";
+                font-size: 10px;
+                color: black;
+                background-color: white;
+                border: 2px solid black;
+                padding: 10px;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #ccffcc;
+            }
+         """)
 
         clear_log_button = QPushButton("🗑️ Clear Log Data")
         clear_log_button.clicked.connect(self.clear_log)
+        clear_log_button.setFont(pixel_font)
+        clear_log_button.setStyleSheet("""
+            QPushButton {
+                font-family: "Press Start 2P";
+                font-size: 10px;
+                color: black;
+                background-color: white;
+                border: 2px solid black;
+                padding: 10px;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #ffcccc;
+            }
+         """)
+        clear_log_button.clicked.connect(self.clear_log)
         data_btn_layout.addWidget(clear_log_button)
+
 
         layout.addLayout(data_btn_layout)
 
@@ -884,12 +936,66 @@ Note: Enable voice commands with the checkbox above first.
 • Speak clearly when using voice commands
 • Use a stable camera position (tripod recommended)
         """)
+        info_label.setFont(pixel_font)
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("padding: 20px; background-color: #f8f9fa; border-radius: 5px; margin-top: 10px;")
-        layout.addWidget(info_label)
+        info_label.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            background-color: white;
+            border: 2px solid black;
+            border-radius: 10px;
+            padding: 16px;
+            margin-top: 12px;
+        """)
+        # Scrollable wrapper
+        info_scroll = QScrollArea()
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setFixedHeight(200)
+        info_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 12px;
+                background: rgba(220, 220, 220, 100);
+            }
+            QScrollBar::handle:vertical {
+                background: #444;
+                border-radius: 6px;
+            }
+         """)
+        info_scroll.setWidget(info_label)
+        layout.addWidget(info_scroll)
+        #layout.addWidget(info_label)
 
         layout.addStretch()
-        self.settings_tab.setLayout(layout)
+        # Wrapping full settings layout inside a container widget
+        settings_inner_widget = QWidget()
+        settings_inner_widget.setLayout(layout)
+        # Scroll Wrapper for tabbed layout
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setWidget(settings_inner_widget)
+        settings_scroll.setStyleSheet("""
+            QScrollArea {
+                    border: none;
+                    background-color: transparent;
+            }
+            QScrollBar:vertical {
+                    width: 12px;
+                    background: rgba(220, 220, 220, 100);
+            }
+            QScrollBar::handle:vertical {
+                background: #444;
+                border-radius: 6px;
+            }
+         """)
+        #  Set main layout of the tab
+        outer_layout = QVBoxLayout()
+        outer_layout.addWidget(settings_scroll)
+        self.settings_tab.setLayout(outer_layout)
+        
 
     def toggle_landmark_visibility(self, state):
         self.show_landmarks = (state == Qt.Checked)
