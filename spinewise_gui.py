@@ -1299,44 +1299,48 @@ class App(QMainWindow):
             image = QLabel()
             image.setPixmap(QPixmap(img_path).scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             image.setAlignment(Qt.AlignCenter)
+            card_layout.addWidget(image)
 
+            # Name
             name_label = QLabel(name)
             name_label.setFont(QFont("Press Start 2P", 10))
             name_label.setAlignment(Qt.AlignCenter)
             name_label.setStyleSheet("color: black;")
+            card_layout.addWidget(name_label)
+
+            # Role + LinkedIn icon side-by-side
+            role_row = QHBoxLayout()
+            role_row.setAlignment(Qt.AlignCenter)
 
             role_label = QLabel(role)
             role_label.setFont(QFont("Press Start 2P", 8))
-            role_label.setAlignment(Qt.AlignCenter)
             role_label.setStyleSheet("color: gray;")
 
-            # LinkedIn button using PNG icon
             linkedin_button = QPushButton()
             linkedin_button.setCursor(Qt.PointingHandCursor)
             linkedin_button.setIcon(QIcon("assets/icons/LinkedIn_logo_initials.png"))
-            linkedin_button.setIconSize(QSize(28, 28))  # Adjust size as needed
-            linkedin_button.setFixedSize(40, 40)
+            linkedin_button.setIconSize(QSize(20, 20))
+            linkedin_button.setFixedSize(28, 28)
             linkedin_button.setStyleSheet("""
                 QPushButton {
                     background-color: transparent;
-                    border: 2px solid black;
-                    border-radius: 6px;
+                    border: none;
+                    margin-left: 8px;
                 }
                 QPushButton:hover {
                     background-color: #d0e7ff;
+                    border-radius: 6px;
                 }
             """)
-
-            # Open LinkedIn URL when clicked
             linkedin_button.clicked.connect(lambda _, url=linkedin: QDesktopServices.openUrl(QUrl(url)))
 
-            card_layout.addWidget(linkedin_button, alignment=Qt.AlignCenter)
+            role_row.addWidget(role_label)
+            role_row.addWidget(linkedin_button)
 
+            card_layout.addLayout(role_row)
 
-            card_layout.addWidget(image)
-            card_layout.addWidget(name_label)
-            card_layout.addWidget(role_label)
             self.carousel_widget.addWidget(card)
+            
 
         popup_layout.addWidget(self.carousel_widget)
 
