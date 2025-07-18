@@ -1286,8 +1286,16 @@ class App(QMainWindow):
             ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png", "https://www.linkedin.com/in/jake-rodriguez-917a24142/"),
         ]
 
+        captions = [
+            "Emdya Permuy-Llovio is an Undergraduate BS in Computer Science student at Florida International University, who is planning on specializing in AI Global Policy and Machine Learning Programming. She intends to pursue graduate studies and acquire a PhD in Machine Learning. Emdya has published her own Java programming introduction textbook in her freshman year of University, grown a following in the tech field with 6,000 followers on LinkedIn, published a Chrome extension to help students manage their stress levels during finals week, and attended various programming-related events such as hackathons and conferences across the world. ",
+            "Juan handles fullstack development with great skill.",
+            "Javier builds solid infrastructure and efficient code.",
+            "John manages machine learning systems and accuracy.",
+            "Jake crafts beautiful alert systems and UI animations."
+        ]
+
         # Create dev cards
-        for name, role, img_path, linkedin in devs_info:
+        for index, (name, role, img_path, linkedin) in enumerate(devs_info):
             card = QWidget()
             card_layout = QVBoxLayout(card)
             card_layout.setAlignment(Qt.AlignCenter)
@@ -1338,6 +1346,14 @@ class App(QMainWindow):
             role_row.addWidget(linkedin_button)
 
             card_layout.addLayout(role_row)
+            # Caption section
+            caption_label = QLabel(captions[index])
+            caption_label.setFont(QFont("Press Start 2P", 7))
+            caption_label.setStyleSheet("color: #333; padding-top: 6px;")
+            caption_label.setAlignment(Qt.AlignCenter)
+            caption_label.setWordWrap(True)
+
+            card_layout.addWidget(caption_label)
 
             self.carousel_widget.addWidget(card)
             
@@ -1358,6 +1374,8 @@ class App(QMainWindow):
         # Pagination Dots
         dot_group = QButtonGroup()
         self.pagination_dots = []
+
+     
 
         for i in range(len(devs_info)):
             dot = QRadioButton()
@@ -1395,13 +1413,6 @@ class App(QMainWindow):
 
         self.carousel_widget.currentChanged.connect(sync_dots)
 
-
-        # TODO: Add more content here if desired
-        content_label = QLabel(" This popup will hold team info or credits.")
-        content_label.setFont(QFont("Press Start 2P", 10))
-        content_label.setWordWrap(True)
-        content_label.setStyleSheet("color: black;")
-        popup_layout.addWidget(content_label)
 
         # Animate expansion
         start_pos = self.folder_icon.mapToGlobal(self.folder_icon.rect().center())
