@@ -1279,7 +1279,7 @@ class App(QMainWindow):
         self.carousel_widget.setFixedHeight(300)  # Adjust as needed
 
         devs_info = [
-            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdya"),
+            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdyapermuy/"),
             ("Juan Mieses", "Fullstack Development ", "assets/dev2.png", "https://www.linkedin.com/in/juanmieses003/"),
             ("Javier Brasil", "Fullstack Development", "assets/dev3.png", "https://www.linkedin.com/in/javier-a-brasil/"),
             ("John Pena ", "Machine Learning Developer and Backend ", "assets/dev4.png", "https://www.linkedin.com/in/johnpenacs/"),
