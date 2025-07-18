@@ -12,11 +12,12 @@ import threading
 import backend
 import speech_recognition as sr
 
+
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
-    QFileDialog, QTextEdit, QDoubleSpinBox, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView
+    QFileDialog, QTextEdit, QDoubleSpinBox, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView,QStylePainter
 )
-from PyQt5.QtGui import QImage, QPixmap, QFont, QIcon, QFontDatabase,QPalette, QBrush, QPixmap
+from PyQt5.QtGui import QImage, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
 from PyQt5.QtCore import Qt, QThread, QSize, pyqtSignal, QTimer
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker,
@@ -907,7 +908,7 @@ Note: Enable voice commands with the checkbox above first.
                 
 
                 # Show only recent entries
-                display_df = df[expected_columns].tail(50)
+                display_df = df[expected_columns].tail(50).reset_index()
 
                 self.log_table.setColumnCount(len(expected_columns))
                 self.log_table.setHorizontalHeaderLabels(expected_columns)
@@ -1120,9 +1121,10 @@ Note: Enable voice commands with the checkbox above first.
         pixmap = QPixmap.fromImage(qt_image)
         scaled_pixmap = pixmap.scaled(
             self.image_label.size(), 
-            Qt.KeepAspectRatioByExpanding, 
+            Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
+
         self.image_label.setPixmap(scaled_pixmap)
 
     def update_stats(self, text):
