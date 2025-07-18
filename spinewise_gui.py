@@ -15,7 +15,7 @@ import speech_recognition as sr
 
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
-    QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView
+    QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget, QGridLayout,QHeaderView
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
 from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
@@ -1205,11 +1205,11 @@ class App(QMainWindow):
             self.log_table.setRowCount(1)
             self.log_table.setColumnCount(1)
             self.log_table.setItem(0, 0, QTableWidgetItem(f"❌ Error loading log: {e}"))
+    
     def expand_folder_popup(self):
         if hasattr(self, 'folder_popup') and self.folder_popup.isVisible():
             return  # prevent double popups
 
-        # Create the popup frame
         self.folder_popup = QFrame(self)
         self.folder_popup.setStyleSheet("""
             QFrame {
@@ -1218,11 +1218,20 @@ class App(QMainWindow):
                 border-radius: 12px;
             }
         """)
-       
+        self.folder_popup.setVisible(True)
         self.folder_popup.raise_()
-        # Add close button
-        close_button = QPushButton("✖", self.folder_popup)
-        close_button.setStyleSheet("""
+
+        # Add layout to the popup
+        popup_layout = QVBoxLayout(self.folder_popup)
+        popup_layout.setContentsMargins(20, 20, 20, 20)
+        popup_layout.setSpacing(10)
+        # Create a grid layout for the top row (title + close)
+        header_grid = QGridLayout()
+
+        # Close button (top-right)
+        self.close_button = QPushButton("✖")
+        self.close_button.setFixedSize(30, 30)
+        self.close_button.setStyleSheet("""
             QPushButton {
                 background-color: #ff6666;
                 color: white;
@@ -1235,24 +1244,44 @@ class App(QMainWindow):
                 background-color: #cc0000;
             }
         """)
-        close_button.setFixedSize(30, 30)
-        close_button.move(10, 10)  # Top-left corner inside popup
-        close_button.clicked.connect(self.folder_popup.close)
+        self.close_button.clicked.connect(self.folder_popup.close)
 
-        # Get global position of folder icon
+        # Title
+        self.devs_title = QLabel("Meet the Devs of Spinewise")
+        self.devs_title.setFont(QFont("Press Start 2P", 12))
+        self.devs_title.setAlignment(Qt.AlignCenter)
+        self.devs_title.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 12px;
+            color: black;
+            background-color: transparent;
+            border: none;
+        """)
+
+        # Inner header layout for close + title
+        header_layout = QHBoxLayout()
+        header_layout.addWidget(self.devs_title, alignment=Qt.AlignLeft)
+        header_layout.addStretch()
+        header_layout.addWidget(self.close_button, alignment=Qt.AlignRight)
+        popup_layout.addLayout(header_layout)
+
+        # TODO: Add more content here if desired
+        content_label = QLabel(" This popup will hold team info or credits.")
+        content_label.setFont(QFont("Press Start 2P", 10))
+        content_label.setWordWrap(True)
+        content_label.setStyleSheet("color: black;")
+        popup_layout.addWidget(content_label)
+
+        # Animate expansion
         start_pos = self.folder_icon.mapToGlobal(self.folder_icon.rect().center())
         start_pos = self.mapFromGlobal(start_pos)
-
-        # Set initial geometry (tiny box at folder)
         self.folder_popup.setGeometry(QRect(start_pos.x(), start_pos.y(), 10, 10))
 
-        # Target: center screen size
         end_width = int(self.width() * 0.8)
         end_height = int(self.height() * 0.7)
         end_x = int((self.width() - end_width) / 2)
         end_y = int((self.height() - end_height) / 2)
 
-        # Animate the expansion
         self.popup_anim = QPropertyAnimation(self.folder_popup, b"geometry")
         self.popup_anim.setDuration(400)
         self.popup_anim.setStartValue(self.folder_popup.geometry())
@@ -1260,9 +1289,8 @@ class App(QMainWindow):
         self.popup_anim.setEasingCurve(QEasingCurve.OutCubic)
         self.popup_anim.start()
 
-        self.folder_popup.setVisible(True)
 
-
+    
 
     def clear_log(self):
         try:
