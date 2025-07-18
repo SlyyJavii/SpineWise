@@ -17,8 +17,8 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
     QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget, QGridLayout,QHeaderView
 )
-from PyQt5.QtGui import QImage, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
-from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
+from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
+from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker,
     draw_landmarks, normalize_lighting, is_calibrating,
@@ -1279,15 +1279,15 @@ class App(QMainWindow):
         self.carousel_widget.setFixedHeight(300)  # Adjust as needed
 
         devs_info = [
-            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png"),
-            ("Juan Mieses", "Fullstack Development ", "assets/dev2.png"),
-            ("Javier Brasil", "Fullstack Development", "assets/dev3.png"),
-            ("John Pena ", "Machine Learning Developer and Backend ", "assets/dev4.png"),
-            ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png"),
+            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdya"),
+            ("Juan Mieses", "Fullstack Development ", "assets/dev2.png", "https://www.linkedin.com/in/juanmieses003/"),
+            ("Javier Brasil", "Fullstack Development", "assets/dev3.png", "https://www.linkedin.com/in/javier-a-brasil/"),
+            ("John Pena ", "Machine Learning Developer and Backend ", "assets/dev4.png", "https://www.linkedin.com/in/johnpenacs/"),
+            ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png", "https://www.linkedin.com/in/jake-rodriguez-917a24142/"),
         ]
 
         # Create dev cards
-        for name, role, img_path in devs_info:
+        for name, role, img_path, linkedin in devs_info:
             card = QWidget()
             card_layout = QVBoxLayout(card)
             card_layout.setAlignment(Qt.AlignCenter)
@@ -1309,6 +1309,29 @@ class App(QMainWindow):
             role_label.setFont(QFont("Press Start 2P", 8))
             role_label.setAlignment(Qt.AlignCenter)
             role_label.setStyleSheet("color: gray;")
+
+            # LinkedIn button using PNG icon
+            linkedin_button = QPushButton()
+            linkedin_button.setCursor(Qt.PointingHandCursor)
+            linkedin_button.setIcon(QIcon("assets/icons/LinkedIn_logo_initials.png"))
+            linkedin_button.setIconSize(QSize(28, 28))  # Adjust size as needed
+            linkedin_button.setFixedSize(40, 40)
+            linkedin_button.setStyleSheet("""
+                QPushButton {
+                    background-color: transparent;
+                    border: 2px solid black;
+                    border-radius: 6px;
+                }
+                QPushButton:hover {
+                    background-color: #d0e7ff;
+                }
+            """)
+
+            # Open LinkedIn URL when clicked
+            linkedin_button.clicked.connect(lambda _, url=linkedin: QDesktopServices.openUrl(QUrl(url)))
+
+            card_layout.addWidget(linkedin_button, alignment=Qt.AlignCenter)
+
 
             card_layout.addWidget(image)
             card_layout.addWidget(name_label)
