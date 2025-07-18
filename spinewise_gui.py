@@ -37,6 +37,7 @@ class SpeechRecognitionThread(QThread):
         self.listening_enabled = False
         self.recognizer = None
         self.microphone = None
+        self.show_landmarks = False
 
     
         
@@ -154,14 +155,18 @@ class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     update_stats_signal = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, show_landmarks = False):
         super().__init__()
         self._run_flag = True  # Make sure this is always True when created
         self.pose_landmarker = None
         self.face_landmarker = None
         self.raw_queue = None
         self.processed_queue = None
+        self.show_landmarks = show_landmarks
         print("[VIDEO] VideoThread initialized with _run_flag = True")
+
+    def set_landmark_visibility(self, show_landmarks):
+        self.show_landmarks = show_landmarks
 
     def process_image_queue(self):
         with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
@@ -186,6 +191,9 @@ class VideoThread(QThread):
                 if pose_results.pose_landmarks:
                     # Don't draw landmarks - keep clean video feed for GUI
                     # draw_landmarks(annotated_image, pose_results.pose_landmarks)
+                     #draw landmarks only if setting is enabled
+                    if self.show_landmarks:
+                        draw_landmarks(annotated_image, pose_results.pose_landmarks)
 
                     # Analyze posture (this still works without drawing landmarks)
                     result = analyze_posture(
@@ -376,9 +384,11 @@ class App(QMainWindow):
 
 
         # Initialize threads
+        self.show_landmarks = False
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
+
 
         self.speech_thread = SpeechRecognitionThread()
         self.speech_thread.command_detected.connect(self.handle_voice_command)
@@ -387,6 +397,7 @@ class App(QMainWindow):
         self.notification_volume = 50
         self.beep_interval = 2.0
         self.alert_duration = 10.0
+        
 
         # Then initialize tabs
         self.init_live_tab()
@@ -596,8 +607,58 @@ class App(QMainWindow):
     def init_settings_tab(self):
         pixel_font = QFont("Press Start 2P", 10)
         pixel_font.setStyleStrategy(QFont.NoAntialias)
+        
+
 
         layout = QVBoxLayout()
+
+          #visual settings group
+        visual_group = QGroupBox("Visual Settings")
+        visual_group.setFont(pixel_font)  # Apply your pixel-style font
+        visual_group.setStyleSheet("""
+            QGroupBox {
+                font-family: "Press Start 2P";
+                font-size: 10px;
+                color: black;
+                border: 2px solid black;
+                border-radius: 5px;
+                margin-top: 10px;
+                background-color: rgba(200, 200, 200, 160);  /* Transparent light gray */
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        visual_layout = QFormLayout()
+        # Pixel font
+        pixel_font = QFont("Press Start 2P", 10)
+        pixel_font.setStyleStrategy(QFont.NoAntialias)
+        #landmark toggle
+        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed")
+        self.landmark_checkbox.setFont(pixel_font)
+        self.landmark_checkbox.setChecked(self.show_landmarks)
+        self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
+
+        landmark_label = QLabel("Landmarks:")
+        landmark_label.setFont(pixel_font)
+        visual_layout.addRow(landmark_label, self.landmark_checkbox)
+
+
+         # info about the landmark toggle
+        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed")
+        landmark_info.setFont(pixel_font)
+        landmark_info.setStyleSheet("""
+            font-size: 10px;
+            color: #333;
+            font-style: italic;
+            font-family: "Press Start 2P";
+        """)
+        visual_layout.addRow("", landmark_info)
+
+        visual_group.setLayout(visual_layout)
+        layout.addWidget(visual_group)
 
         #notif_group = QGroupBox("Notification Settings")
         notif_group = QGroupBox()
@@ -611,6 +672,7 @@ class App(QMainWindow):
                 border: 2px solid black;
                 border-radius: 5px;
                 margin-top: 10px;
+                background-color: rgba(200, 200, 200, 160);  /* Light gray with transparency */
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -618,6 +680,7 @@ class App(QMainWindow):
                 padding: 0 5px;
             }
         """)
+        self.settings_tab.setStyleSheet("background-color: transparent;")
 
 
         notif_layout = QFormLayout()
@@ -695,9 +758,25 @@ class App(QMainWindow):
         layout.addStretch()
 
         # Voice Control Section
-        voice_section = QLabel("🎤 Voice Control Settings")
-        voice_section.setFont(QFont("Times New Roman", 14, QFont.Bold))
-        layout.addWidget(voice_section)
+        voice_group = QGroupBox("🎤 Voice Control Settings")
+        voice_group.setFont(pixel_font)  # reuse your pixel font
+        voice_group.setStyleSheet("""
+            QGroupBox {
+                    font-family: "Press Start 2P";
+                    font-size: 10px;
+                    color: black;
+                    border: 2px solid black;
+                    border-radius: 5px;
+                    margin-top: 20px;
+                    background-color: rgba(200, 200, 200, 160);  /* Light gray with transparency */
+                }
+            QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+            }
+        """)    
+        voice_layout = QVBoxLayout()
 
         # Voice enable/disable
         self.voice_checkbox = QCheckBox("Enable Voice Commands")
@@ -734,7 +813,11 @@ Note: Enable voice commands with the checkbox above first.
         """)
         voice_help.setWordWrap(True)
         voice_help.setStyleSheet("padding: 15px; background-color: #e8f4fd; border-radius: 5px; font-size: 11px;")
-        layout.addWidget(voice_help)
+        #layout.addWidget(voice_help)
+        voice_layout.addWidget(self.voice_checkbox)
+        voice_layout.addWidget(voice_help)
+        voice_group.setLayout(voice_layout)
+        layout.addWidget(voice_group)
 
         layout.addWidget(QLabel(""))  # Spacer
 
@@ -777,6 +860,19 @@ Note: Enable voice commands with the checkbox above first.
 
         layout.addStretch()
         self.settings_tab.setLayout(layout)
+
+    def toggle_landmark_visibility(self, state):
+        self.show_landmarks = (state == Qt.Checked)
+        status = "enabled" if self.show_landmarks else "disabled"
+        print(f"[GUI] Landmark visibility {status}")
+
+        if self.video_thread and self.video_thread.isRunning():
+            self.video_thread.set_landmark_visibility(self.show_landmarks)
+        # Provide user feedback
+        if self.show_landmarks:
+            self.stats_display.setText("Landmarks enabled - pose detection points will be visible")
+        else:
+            self.stats_display.setText("Landmarks disabled - clean video feed") 
 
     def _on_volume_changed(self, value):
         self.notification_volume = value
@@ -861,7 +957,7 @@ Note: Enable voice commands with the checkbox above first.
 
         # HELP COMMAND
         elif any(word in ["help", "commands", "what", "options"] for word in words):
-            print("[VOICE] ✅ Help command detected")
+            print("[VOICE] Help command detected")
             self.stats_display.setText("🎤 Commands: 'start' (camera), 'stop' (camera), 'cal' (calibrate), 'exit' (app)")
 
         else:
@@ -1005,9 +1101,11 @@ Note: Enable voice commands with the checkbox above first.
 
         # Create a completely new video thread
         print("[INFO] Creating new video thread...")
-        self.video_thread = VideoThread()
+        self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
+
+
 
         # Start the new thread
         self.video_thread.start()
