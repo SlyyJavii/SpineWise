@@ -14,11 +14,11 @@ import speech_recognition as sr
 
 
 from PyQt5.QtWidgets import (
-    QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
+    QLabel, QPushButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
     QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
-from PyQt5.QtCore import Qt, QThread, QSize, pyqtSignal, QEvent, QTimer
+from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker,
     draw_landmarks, normalize_lighting, is_calibrating,
@@ -1152,8 +1152,7 @@ class App(QMainWindow):
                 df = pd.read_csv(log_path, header=None, names=expected_columns)
 
                 
-                
-
+        
                 # Show only recent entries
                 display_df = df[expected_columns].tail(50).reset_index()
 
@@ -1206,6 +1205,64 @@ class App(QMainWindow):
             self.log_table.setRowCount(1)
             self.log_table.setColumnCount(1)
             self.log_table.setItem(0, 0, QTableWidgetItem(f"❌ Error loading log: {e}"))
+    def expand_folder_popup(self):
+        if hasattr(self, 'folder_popup') and self.folder_popup.isVisible():
+            return  # prevent double popups
+
+        # Create the popup frame
+        self.folder_popup = QFrame(self)
+        self.folder_popup.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 240);
+                border: 3px solid black;
+                border-radius: 12px;
+            }
+        """)
+       
+        self.folder_popup.raise_()
+        # Add close button
+        close_button = QPushButton("✖", self.folder_popup)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ff6666;
+                color: white;
+                font-size: 16px;
+                border: 2px solid black;
+                border-radius: 6px;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: #cc0000;
+            }
+        """)
+        close_button.setFixedSize(30, 30)
+        close_button.move(10, 10)  # Top-left corner inside popup
+        close_button.clicked.connect(self.folder_popup.close)
+
+        # Get global position of folder icon
+        start_pos = self.folder_icon.mapToGlobal(self.folder_icon.rect().center())
+        start_pos = self.mapFromGlobal(start_pos)
+
+        # Set initial geometry (tiny box at folder)
+        self.folder_popup.setGeometry(QRect(start_pos.x(), start_pos.y(), 10, 10))
+
+        # Target: center screen size
+        end_width = int(self.width() * 0.8)
+        end_height = int(self.height() * 0.7)
+        end_x = int((self.width() - end_width) / 2)
+        end_y = int((self.height() - end_height) / 2)
+
+        # Animate the expansion
+        self.popup_anim = QPropertyAnimation(self.folder_popup, b"geometry")
+        self.popup_anim.setDuration(400)
+        self.popup_anim.setStartValue(self.folder_popup.geometry())
+        self.popup_anim.setEndValue(QRect(end_x, end_y, end_width, end_height))
+        self.popup_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.popup_anim.start()
+
+        self.folder_popup.setVisible(True)
+
+
 
     def clear_log(self):
         try:
@@ -1372,7 +1429,11 @@ class App(QMainWindow):
                 self.folder_icon.setPixmap(QPixmap("assets/icons/folder_open.png"))
             elif event.type() == QEvent.Leave:
                 self.folder_icon.setPixmap(QPixmap("assets/icons/folder_closed.png"))
+            elif event.type() == QEvent.MouseButtonPress:
+                self.expand_folder_popup()
         return super().eventFilter(source, event)
+           
+
 
 
     def update_image(self, qt_image):
