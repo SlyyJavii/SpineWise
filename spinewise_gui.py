@@ -15,7 +15,7 @@ import speech_recognition as sr
 
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
-    QFileDialog, QTextEdit, QDoubleSpinBox, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView,QStylePainter
+    QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget,QHeaderView
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
 from PyQt5.QtCore import Qt, QThread, QSize, pyqtSignal, QTimer
@@ -784,36 +784,66 @@ class App(QMainWindow):
         self.voice_checkbox.stateChanged.connect(self.toggle_voice_recognition)
         self.voice_checkbox.setStyleSheet("font-size: 12px; padding: 5px;")
         layout.addWidget(self.voice_checkbox)
-
+        
         # Voice commands help
         voice_help = QLabel("""
-🎤 Voice Commands Available:
+Voice Commands Available:
 • "start" → Start camera feed (app stays open)
 • "stop" → Stop camera feed (app stays open) 
 • "cal" or "collab" → Start posture calibration
 • "exit" or "quit" → Close entire application
 
-🔄 Camera Control:
+Camera Control:
 • "stop" only turns off camera - you can say "start" to turn it back on
 • App keeps running in background when camera is stopped
 • Only "exit" will close the entire application
 
-💡 Speech Tips:
+Speech Tips:
 • Use "stop" to pause camera, "exit" to close app
 • "cal" works better than "calibrate" for speech recognition
 • Wait for "Listening..." before speaking
 • Speak clearly at normal volume
 
-📝 Recognition Examples:
-• "stop" → Camera off, app running ✅
-• "start" → Camera on ✅  
-• "exit" → Close everything ✅
+Recognition Examples:
+• "stop" → Camera off, app running 
+• "start" → Camera on   
+• "exit" → Close everything 
 
 Note: Enable voice commands with the checkbox above first.
         """)
         voice_help.setWordWrap(True)
-        voice_help.setStyleSheet("padding: 15px; background-color: #e8f4fd; border-radius: 5px; font-size: 11px;")
-        #layout.addWidget(voice_help)
+        voice_help.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 10px;
+            color: black;
+            padding: 10px;
+            background-color: white;
+            border: 2px solid black;
+            border-radius: 6px;
+        """)
+        # Wrap it in a scroll area
+        voice_help_scroll = QScrollArea()
+        voice_help_scroll.setWidgetResizable(True)
+        voice_help_scroll.setFixedHeight(180)  # Adjust based on visual space
+        voice_help_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 12px;
+                background: rgba(220, 220, 220, 100);
+            }
+            QScrollBar::handle:vertical {
+                background: #444;
+                border-radius: 6px;
+            }
+        """)
+        voice_help_scroll.setWidget(voice_help)
+
+        # Add to the voice layout
+        voice_layout.addWidget(self.voice_checkbox)
+        voice_layout.addWidget(voice_help_scroll)   
+        voice_help.setFont(pixel_font)
         voice_layout.addWidget(self.voice_checkbox)
         voice_layout.addWidget(voice_help)
         voice_group.setLayout(voice_layout)
