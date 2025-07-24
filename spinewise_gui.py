@@ -1142,7 +1142,7 @@ class App(QMainWindow):
     def load_log(self):
         
         try:
-            log_path = os.path.join(os.path.dirname(__file__), "posture_log_export.csv")
+            log_path = os.path.join(os.path.dirname(__file__), "posture_trend_log.csv")
 
             print(f"[DEBUG] Absolute path: {os.path.abspath(log_path)}")
             print(f"[DEBUG] File exists: {os.path.exists(log_path)}")
@@ -1498,7 +1498,7 @@ class App(QMainWindow):
             dest, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save Log",
-                "posture_log_export.csv",
+                "posture_trend_log.csv",
                 "CSV Files (*.csv)"
             )
             if dest:

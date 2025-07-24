@@ -158,7 +158,17 @@ def log_posture_sample(features, label, frame=None, filename="posture_dataset.cs
         save_posture_image(frame, label)  # Save image to the correct label folder
 
 
-def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confidence_score):
+_last_log_time = 0
+
+def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confidence_score, interval = 3):
+    global _last_log_time
+    current_time = time.time()
+
+    if current_time - _last_log_time < interval:
+        return 
+    
+    _last_log_time = current_time
+
     """Log posture data to the trend log file"""
     file_exists = os.path.exists("posture_trend_log.csv")
     with open("posture_trend_log.csv", mode='a', newline='') as file:
