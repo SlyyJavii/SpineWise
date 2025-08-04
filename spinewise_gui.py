@@ -1289,7 +1289,7 @@ class App(QMainWindow):
 
         captions = [
             "Emdya Permuy-Llovio is an Undergraduate BS in Computer Science student at Florida International University, who is planning on specializing in AI Global Policy and Machine Learning Programming. She intends to pursue graduate studies and acquire a PhD in Machine Learning. Emdya has published her own Java programming introduction textbook in her freshman year of University, grown a following in the tech field with 6,000 followers on LinkedIn, published a Chrome extension to help students manage their stress levels during finals week, and attended various programming-related events such as hackathons and conferences across the world. ",
-            "Juan handles fullstack development with great skill.",
+            "Juan A. Mieses is a Florida International University Undergraduate student pursuing a Bachelor's Degree of Science in Computer Science, tackling ethical approaches to fullstack development and programming, with an interest in game development and writing fiction. In charge of frontend and UI/UX choices within SpineWise, this is the first time he's worked extensively with frontend rather than backend, utilizing this opportunity to diversify his skillset and give input on a project with a tangibly beneficial impact.",
             "Javier builds solid infrastructure and efficient code.",
             "John Pena is an aspiring undergraduate studying Computer Science, preferring cybersecurity tasks and backend development with both high-level and low-level languages.",
             "Jake crafts beautiful alert systems and UI animations."
