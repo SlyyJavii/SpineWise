@@ -10,6 +10,8 @@ import numpy as np
 import pygame
 import os
 import time
+import joblib
+import pandas as pd
 from os.path import exists
 from urllib.request import urlretrieve
 from posture_image_logger import save_posture_image, initialize_folders
@@ -18,6 +20,20 @@ from posture_image_logger import save_posture_image, initialize_folders
 notification_volume = 50  # Default volume (0-100)
 beep_interval = 2  # Default beep interval in seconds
 alert_duration = 10  # Default alert duration in seconds
+
+#load the trained posture model
+ml_model = joblib.load("posture_model.pkl")
+
+def predict_posture_ml(features: dict):
+    """
+    Predict posture using the trained ML model.
+    Args:
+        features (dict): same structure you log in posture_dataset.csv
+    Returns:
+        str: predicted label ("good", "moderate", "bad")
+    """
+    X = pd.DataFrame([features])
+    return ml_model.predict(X)[0]
 
 initialize_folders()
 pygame.init()
@@ -663,9 +679,6 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
                 landmark_source = "Face Mesh cheeks" if (
                             left_cheek is not None and right_cheek is not None) else "Pose ears"
-                print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
-                      f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
-                      f"Source: {landmark_source}, Score: {head_tilt_score}/3")
 
             # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
             torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)
@@ -689,11 +702,6 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             clavicle_penalty = min(posture_drop_score // 2, 2)  # 0-2 extra points for severe drops
             combined_confidence = min(base_combined + clavicle_penalty, 7)
 
-            # Debug output for clavicle tracking
-            if posture_drop_score > 1:
-                print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
-                      f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
-                      f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
 
             # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(combined_confidence, 7)
@@ -906,13 +914,24 @@ def run_standalone():
                                drawing_styles.get_default_pose_landmarks_style())
 
                 if pose_results.pose_landmarks:
-                    analyze_posture(annotated_image, pose_results.pose_landmarks[0], face_results.face_landmarks)
+                    status = analyze_posture(annotated_image, pose_results.pose_landmarks[0], face_results.face_landmarks)
+
+                if 'latest_features' in globals():
+                    ml_prediction = predict_posture_ml(latest_features)
+                    print(f"[DEBUG] ML features: {latest_features}")
+                    print(f"[DEBUG] ML prediction: {ml_prediction}")
+                    cv.putText(annotated_image,
+                    f"Threshold: {status} | ML: {ml_prediction}",
+                    (30, 60), cv.FONT_HERSHEY_SIMPLEX, 0.8,
+                    (255, 255, 255), 2)
 
                 cv.imshow('Posture Detection', annotated_image)
 
                 key = cv.waitKey(5) & 0xFF
+                global is_manual_labeling
                 if key == 27:
                     break
+        
                 # keys for the manual data logging
                 elif key == ord('l'):
                     is_manual_labeling = not is_manual_labeling
