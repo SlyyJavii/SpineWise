@@ -15,7 +15,8 @@ import speech_recognition as sr
 
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
-    QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget, QGridLayout,QHeaderView
+    QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget, QGridLayout,QHeaderView,
+    QAction, QLineEdit
 )
 from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
 from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
@@ -321,7 +322,14 @@ class App(QMainWindow):
         # Set as central widget
         central_widget = QWidget()
         central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)   
+        self.setCentralWidget(central_widget)  
+        
+        menu = self.menuBar()
+        view_menu = menu.addMenu("View")
+
+        rec_action = QAction("Recommendations", self)
+        rec_action.triggered.connect(lambda: self.tab_widget.setCurrentWidget(self.recommendations_tab))
+        view_menu.addAction(rec_action) 
 
         background_path = os.path.join(os.path.dirname(__file__), "assets/sky_background.png")
         self.bg_pixmap = QPixmap(background_path)
@@ -339,6 +347,9 @@ class App(QMainWindow):
         self.log_tab = QWidget()
         self.settings_tab = QWidget()
 
+        self.tab_widget.addTab(self.live_tab, "Live Posture")
+        self.tab_widget.addTab(self.log_tab, "Posture Log")
+        self.tab_widget.addTab(self.settings_tab, "Settings")
         self.tab_widget.addTab(self.live_tab, "Live Posture")
         self.tab_widget.addTab(self.log_tab, "Posture Log")
         self.tab_widget.addTab(self.settings_tab, "Settings")
@@ -381,6 +392,8 @@ class App(QMainWindow):
                 }
             """)
 
+        self.recommendations_tab = QWidget()
+        self.tab_widget.addTab(self.recommendations_tab, "Recommendations")
 
 
         # Initialize threads
@@ -403,6 +416,8 @@ class App(QMainWindow):
         self.init_live_tab()
         self.init_log_tab()
         self.init_settings_tab()
+        
+        self.init_recommendations_tab()
 
 
 
@@ -416,7 +431,126 @@ class App(QMainWindow):
         palette.setBrush(QPalette.Window, QBrush(scaled))
         self.setPalette(palette)
         super().resizeEvent(event)
-    
+        
+    def init_recommendations_tab(self):
+        pixel_font = QFont("Press Start 2P", 10)
+        pixel_font.setStyleStrategy(QFont.NoAntialias)
+
+        layout = QVBoxLayout()
+
+        # Header
+        title = QLabel("Personalized Recommendations")
+        title.setFont(pixel_font)
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            font-family: "Press Start 2P";
+            font-size: 12px;
+            color: black;
+            background-color: white;
+            border: 2px solid black;
+            border-radius: 10px;
+            padding: 12px;
+        """)
+        layout.addWidget(title)
+
+        # Quick filters / inputs row
+        filters_row = QHBoxLayout()
+
+        self.issue_filter_input = QLineEdit()
+        self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders, slouching")
+        self.issue_filter_input.setFont(pixel_font)
+        self.issue_filter_input.setStyleSheet("""
+            background-color: white;
+            border: 2px solid black;
+            padding: 6px;
+        """)
+        filters_row.addWidget(QLabel("Focus issues:"))
+        filters_row.addWidget(self.issue_filter_input, 1)
+
+        self.budget_input = QLineEdit()
+        self.budget_input.setPlaceholderText("Max budget (optional)")
+        self.budget_input.setFont(pixel_font)
+        self.budget_input.setStyleSheet("""
+            background-color: white;
+            border: 2px solid black;
+            padding: 6px;
+            max-width: 140px;
+        """)
+        filters_row.addWidget(QLabel("Budget:"))
+        filters_row.addWidget(self.budget_input)
+
+        layout.addLayout(filters_row)
+
+        # Table for results
+        self.recs_table = QTableWidget()
+        self.recs_table.setColumnCount(6)
+        self.recs_table.setHorizontalHeaderLabels([
+            "Product", "Category", "Why it helps", "Confidence", "Price", "Link"
+        ])
+        self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.recs_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.recs_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #ffffff;
+                color: black;
+                gridline-color: #444;
+                border: 2px solid black;
+                border-radius: 8px;
+            }
+            QHeaderView::section {
+                background-color: #eaeaea;
+                color: black;
+                font-weight: bold;
+                border: 1px solid #444;
+            }
+        """)
+        layout.addWidget(self.recs_table)
+
+        # Action buttons
+        buttons = QHBoxLayout()
+
+        generate_btn = QPushButton("🔎 Generate Recommendations")
+        generate_btn.setFont(pixel_font)
+        generate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f0f0f0;
+                border: 3px solid #000000;
+                border-bottom: 4px solid #000000;
+                border-right: 4px solid #000000;
+                border-radius: 10px;
+                padding: 8px 14px;
+            }
+            QPushButton:hover { background-color: #ccffcc; }
+        """)
+        generate_btn.clicked.connect(self._on_generate_recommendations)
+        buttons.addWidget(generate_btn)
+
+        save_btn = QPushButton("Save as CSV")
+        save_btn.setFont(pixel_font)
+        save_btn.clicked.connect(self._on_save_recommendations_csv)
+        buttons.addWidget(save_btn)
+
+        layout.addLayout(buttons)
+
+        # Footer note linking to stories/subtasks
+        foot = QLabel(
+            "Notes: Uses posture history (1C) → maps issues to query terms (1B) → applies confidence weights (1A)."
+        )
+        foot.setFont(pixel_font)
+        foot.setStyleSheet("color: #333; background: transparent;")
+        foot.setAlignment(Qt.AlignCenter)
+        layout.addWidget(foot)
+
+        # Set it all
+        container = QWidget()
+        container.setLayout(layout)
+        outer = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+        outer.addWidget(scroll)
+        self.recommendations_tab.setLayout(outer)
 
 
     def init_live_tab(self):
@@ -448,7 +582,7 @@ class App(QMainWindow):
         pixel_font_title.setStyleStrategy(QFont.NoAntialias)
 
         title = QLabel("Live Posture Monitoring")
-        title.setFont(pixel_font_title)  # ✅ Now uses the pixel font
+        title.setFont(pixel_font_title)  # Now uses the pixel font
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("""
             color: black;
@@ -1011,6 +1145,119 @@ class App(QMainWindow):
         outer_layout.addWidget(settings_scroll)
         self.settings_tab.setLayout(outer_layout)
         
+    def _on_generate_recommendations(self):
+        """
+        Builds a simple request from posture history + UI filters,
+        calls backend stubs, then populates the table.
+        """
+        try:
+            import backend
+
+            # --- 1C: References / posture history for mapping ---
+            # You’ll implement these functions in backend.py.
+            # get_posture_history() should return recent labeled issues (strings) or structured events.
+            # get_recommendation_references() can return an internal mapping of issue->keywords/categories.
+            posture_history = getattr(backend, "get_posture_history", lambda: [])()
+            references = getattr(backend, "get_recommendation_references", lambda: {})()
+
+            # User overrides from UI
+            focus_text = (self.issue_filter_input.text() or "").strip()
+            extra_focus = [s.strip() for s in focus_text.split(",") if s.strip()]
+            budget_raw = (self.budget_input.text() or "").strip()
+            try:
+                budget = float(budget_raw) if budget_raw else None
+            except ValueError:
+                budget = None
+
+            # --- 1A: Confidence weights (placeholder) ---
+            # If you expose per-issue weights in Settings later, read & pass them in here.
+            # For now, let backend derive weights from posture_history.
+            weights = None
+
+            # --- 1B: SerpAPI Amazon query ---
+            # You’ll implement query_products_via_serpapi(issues, refs, extra_focus, budget, weights)
+            # to call SerpAPI (keep key in env / config).
+            issues = extra_focus if extra_focus else posture_history
+            results = getattr(backend, "query_products_via_serpapi", lambda *args, **kwargs: [])(
+                issues=issues,
+                references=references,
+                extra_focus=extra_focus,
+                budget=budget,
+                weights=weights
+            )
+
+            # Fill table
+            self._populate_recs_table(results)
+
+            # Update status panel to reflect the action
+            if hasattr(self, "stats_display"):
+                self.stats_display.setText("Recommendations updated from posture history & filters.")
+
+        except Exception as e:
+            if hasattr(self, "stats_display"):
+                self.stats_display.setText(f"Failed to get recommendations: {e}")
+            print("[RECS] Error:", e)
+
+    def _populate_recs_table(self, products):
+        """
+        products: list of dicts with keys:
+        title, category, why, confidence (0..1), price_text, url
+        """
+        self.recs_table.setRowCount(0)
+        if not products:
+            self.recs_table.setRowCount(1)
+            self.recs_table.setItem(0, 0, QTableWidgetItem("No recommendations yet."))
+            return
+
+        self.recs_table.setRowCount(len(products))
+        for r, p in enumerate(products):
+            title = p.get("title", "—")
+            cat = p.get("category", "—")
+            why = p.get("why", "—")
+            conf = p.get("confidence", None)
+            price = p.get("price_text", "—")
+            url = p.get("url", "")
+
+            self.recs_table.setItem(r, 0, QTableWidgetItem(title))
+            self.recs_table.setItem(r, 1, QTableWidgetItem(cat))
+            self.recs_table.setItem(r, 2, QTableWidgetItem(why))
+
+            conf_display = "—" if conf is None else f"{round(float(conf)*100):d}%"
+            self.recs_table.setItem(r, 3, QTableWidgetItem(conf_display))
+            self.recs_table.setItem(r, 4, QTableWidgetItem(price))
+
+            link_item = QTableWidgetItem(url if url else "—")
+            if url:
+                # not clickable by default; double-click handler could open QDesktopServices
+                pass
+            self.recs_table.setItem(r, 5, link_item)
+
+    def _on_save_recommendations_csv(self):
+        try:
+            dest, _ = QFileDialog.getSaveFileName(
+                self, "Save Recommendations", "recommendations.csv", "CSV Files (*.csv)"
+            )
+            if not dest:
+                return
+
+            import csv
+            cols = [self.recs_table.horizontalHeaderItem(i).text() for i in range(self.recs_table.columnCount())]
+
+            with open(dest, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(cols)
+                for r in range(self.recs_table.rowCount()):
+                    row = []
+                    for c in range(self.recs_table.columnCount()):
+                        item = self.recs_table.item(r, c)
+                        row.append(item.text() if item else "")
+                    writer.writerow(row)
+
+            if hasattr(self, "stats_display"):
+                self.stats_display.setText("💾 Saved recommendations to CSV.")
+        except Exception as e:
+            if hasattr(self, "stats_display"):
+                self.stats_display.setText(f"Save failed: {e}")
 
     def toggle_landmark_visibility(self, state):
         self.show_landmarks = (state == Qt.Checked)
