@@ -271,6 +271,54 @@ class VideoThread(QThread):
         print("[VIDEO] Stop method complete (no wait called)")
 
 
+class ProductCard(QFrame):
+    def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ProductCard")
+        self.setStyleSheet("""
+            QFrame#ProductCard {
+                background: #FFFFFF;
+                border: 1px solid #D5E3F4;
+                border-radius: 12px;
+            }
+            QLabel#CardTitle {
+                color: #0F3D66; font-weight: 600; font-size: 14px;
+            }
+            QLabel#Pill {
+                color: #2F6EA9; background: #E8F2FF;
+                padding: 2px 8px; border-radius: 10px; font-size: 11px;
+            }
+            QLabel#Why { color: #3E4C5E; }
+            QLabel#Meta { color: #5E6A7D; }
+            QLabel#Price { color: #0B5CAD; font-weight: 600; }
+        """)
+
+        v = QVBoxLayout(self)
+        # Title row
+        title_lbl = QLabel(title or "—"); title_lbl.setObjectName("CardTitle"); title_lbl.setWordWrap(True)
+        pill = QLabel(category or "—"); pill.setObjectName("Pill")
+        top = QHBoxLayout(); top.addWidget(title_lbl, 1); top.addWidget(pill, 0, Qt.AlignRight)
+        v.addLayout(top)
+
+        why_lbl = QLabel(why or "—"); why_lbl.setObjectName("Why"); why_lbl.setWordWrap(True)
+        v.addWidget(why_lbl)
+
+        meta = []
+        if rating: meta.append(f"⭐ {rating}")
+        if reviews: meta.append(f"({reviews} reviews)")
+        meta_lbl = QLabel(" ".join(meta) if meta else " "); meta_lbl.setObjectName("Meta")
+        v.addWidget(meta_lbl)
+
+        bottom = QHBoxLayout()
+        price_lbl = QLabel(price_text or "—"); price_lbl.setObjectName("Price")
+        bottom.addWidget(price_lbl)
+        if url:
+            link = QLabel(f'<a href="{url}">Open</a>')
+            link.setOpenExternalLinks(True)
+            bottom.addStretch(1)
+            bottom.addWidget(link)
+        v.addLayout(bottom)
+
 class App(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -432,125 +480,164 @@ class App(QMainWindow):
         self.setPalette(palette)
         super().resizeEvent(event)
         
+    def _on_refresh_products_from_csv(self):
+        base = os.path.dirname(__file__)
+        files = [
+            ("Neck Pillow", os.path.join(base, "neck_pillow_results.csv")),
+            ("Posture Corrector", os.path.join(base, "posture_corrector_results.csv")),
+            ("Resistance Bands", os.path.join(base, "resistance_bands_results.csv")),
+        ]
+
+        products = []
+        for category, path in files:
+            if not os.path.exists(path):
+                continue
+            try:
+                df = pd.read_csv(path)
+                for _, row in df.head(2).iterrows():
+                    products.append({
+                        "title": str(row.get("Title", "—")),
+                        "category": category,
+                        "why": f"{category} can help improve posture by providing targeted support or training.",
+                        "confidence": None,
+                        "price_text": str(row.get("Print_Price", "—")),
+                        "rating": str(row.get("Rating", "")) if not pd.isna(row.get("Rating", "")) else "",
+                        "reviews": str(row.get("Reviews", "")) if not pd.isna(row.get("Reviews", "")) else "",
+                        "url": str(row.get("Link", "")),
+                    })
+            except Exception as e:
+                print("[RECS] CSV read failed for", path, ":", e)
+
+        if not products:
+            products = [
+                {"title":"Memory Foam Neck Pillow", "category":"Neck Pillow", "why":"Supports cervical alignment during long sessions.",
+                "confidence":None, "price_text":"$24.99", "rating":"4.5", "reviews":"12,345", "url":""},
+                {"title":"Adjustable Posture Corrector", "category":"Posture Corrector", "why":"Gently retracts shoulders to counter slouching.",
+                "confidence":None, "price_text":"$29.99", "rating":"4.3", "reviews":"8,901", "url":""},
+                {"title":"Resistance Bands Set", "category":"Resistance Bands", "why":"Helps strengthen scapular stabilizers.",
+                "confidence":None, "price_text":"$19.99", "rating":"4.6", "reviews":"22,101", "url":""},
+            ]
+
+        self._display_product_cards(products)
+        self._populate_recs_table(products)
+
+    def _display_product_cards(self, products):
+        while self.product_grid.count():
+            w = self.product_grid.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+
+        cols = 3
+        for i, p in enumerate(products):
+            r, c = divmod(i, cols)
+            card = ProductCard(
+                title=p.get("title"),
+                category=p.get("category"),
+                why=p.get("why"),
+                price_text=p.get("price_text"),
+                rating=p.get("rating"),
+                reviews=p.get("reviews"),
+                url=p.get("url"),
+            )
+            self.product_grid.addWidget(card, r, c)
+
+        self.product_grid.setRowStretch((len(products) + cols - 1) // cols + 1, 1)
+        
     def init_recommendations_tab(self):
-        pixel_font = QFont("Press Start 2P", 10)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-
-        layout = QVBoxLayout()
-
-        # Header
-        title = QLabel("Personalized Recommendations")
-        title.setFont(pixel_font)
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 12px;
-            color: black;
-            background-color: white;
-            border: 2px solid black;
-            border-radius: 10px;
-            padding: 12px;
-        """)
-        layout.addWidget(title)
-
-        # Quick filters / inputs row
-        filters_row = QHBoxLayout()
-
-        self.issue_filter_input = QLineEdit()
-        self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders, slouching")
-        self.issue_filter_input.setFont(pixel_font)
-        self.issue_filter_input.setStyleSheet("""
-            background-color: white;
-            border: 2px solid black;
-            padding: 6px;
-        """)
-        filters_row.addWidget(QLabel("Focus issues:"))
-        filters_row.addWidget(self.issue_filter_input, 1)
-
-        self.budget_input = QLineEdit()
-        self.budget_input.setPlaceholderText("Max budget (optional)")
-        self.budget_input.setFont(pixel_font)
-        self.budget_input.setStyleSheet("""
-            background-color: white;
-            border: 2px solid black;
-            padding: 6px;
-            max-width: 140px;
-        """)
-        filters_row.addWidget(QLabel("Budget:"))
-        filters_row.addWidget(self.budget_input)
-
-        layout.addLayout(filters_row)
-
-        # Table for results
-        self.recs_table = QTableWidget()
-        self.recs_table.setColumnCount(6)
-        self.recs_table.setHorizontalHeaderLabels([
-            "Product", "Category", "Why it helps", "Confidence", "Price", "Link"
-        ])
-        self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.recs_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.recs_table.setStyleSheet("""
+        self.recommendations_tab.setObjectName("RecsTab")
+        self.recommendations_tab.setStyleSheet("""
+            QWidget#RecsRoot {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 #F6FAFF, stop:1 #EAF2FF);
+            }
+            QLabel.SectionTitle {
+                color:#0B5CAD; font-size:18px; font-weight:600;
+            }
+            QLabel.SubTitle {
+                color:#2F6EA9; font-size:14px; font-weight:600;
+            }
+            QPushButton.Primary {
+                background:#0B5CAD; color:white; border:none; border-radius:8px; padding:8px 14px;
+            }
+            QPushButton.Primary:hover { background:#0D6EDB; }
+            QLineEdit {
+                background:#FFFFFF; border:1px solid #C9D7EE; border-radius:6px; padding:6px;
+            }
             QTableWidget {
-                background-color: #ffffff;
-                color: black;
-                gridline-color: #444;
-                border: 2px solid black;
-                border-radius: 8px;
+                background:#FFFFFF; color:#0F2238;
+                gridline-color:#DDE6F6; border:1px solid #D5E3F4; border-radius:8px;
             }
             QHeaderView::section {
-                background-color: #eaeaea;
-                color: black;
-                font-weight: bold;
-                border: 1px solid #444;
+                background-color:#F2F7FF; color:#0F2238;
+                font-weight:600; border:1px solid #D5E3F4;
             }
         """)
-        layout.addWidget(self.recs_table)
 
-        # Action buttons
+        root = QWidget(); root.setObjectName("RecsRoot")
+        outer = QVBoxLayout(root); outer.setContentsMargins(16,16,16,16); outer.setSpacing(14)
+
+        cards_title = QLabel("Recommended Products"); cards_title.setProperty("class", "SectionTitle")
+        cards_title.setAlignment(Qt.AlignLeft)
+        cards_title.setObjectName("SectionTitle")
+        outer.addWidget(cards_title)
+
+        tools = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh from CSV"); refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary")
+        refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
+        tools.addWidget(refresh_btn, 0)
+        tools.addStretch(1)
+        outer.addLayout(tools)
+
+        self.products_container = QWidget()
+        self.product_grid = QGridLayout(self.products_container)
+        self.product_grid.setContentsMargins(0,0,0,0)
+        self.product_grid.setHorizontalSpacing(12)
+        self.product_grid.setVerticalSpacing(12)
+        outer.addWidget(self.products_container)
+
+        controls_title = QLabel("Fine-tune & Export"); controls_title.setObjectName("SubTitle"); controls_title.setProperty("class", "SubTitle")
+        outer.addWidget(controls_title)
+
+        filters_row = QHBoxLayout()
+        issue_lbl = QLabel("Focus issues:")
+        self.issue_filter_input = QLineEdit()
+        self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
+        filters_row.addWidget(issue_lbl)
+        filters_row.addWidget(self.issue_filter_input, 1)
+
+        budget_lbl = QLabel("Budget:")
+        self.budget_input = QLineEdit()
+        self.budget_input.setPlaceholderText("Max $ (optional)")
+        self.budget_input.setFixedWidth(160)
+        filters_row.addWidget(budget_lbl)
+        filters_row.addWidget(self.budget_input)
+        outer.addLayout(filters_row)
+
+        self.recs_table = QTableWidget()
+        self.recs_table.setColumnCount(6)
+        self.recs_table.setHorizontalHeaderLabels(["Product", "Category", "Why it helps", "Confidence", "Price", "Link"])
+        self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.recs_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        outer.addWidget(self.recs_table)
+
         buttons = QHBoxLayout()
-
-        generate_btn = QPushButton("🔎 Generate Recommendations")
-        generate_btn.setFont(pixel_font)
-        generate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f0f0f0;
-                border: 3px solid #000000;
-                border-bottom: 4px solid #000000;
-                border-right: 4px solid #000000;
-                border-radius: 10px;
-                padding: 8px 14px;
-            }
-            QPushButton:hover { background-color: #ccffcc; }
-        """)
+        generate_btn = QPushButton("Generate Recommendations"); generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary")
         generate_btn.clicked.connect(self._on_generate_recommendations)
         buttons.addWidget(generate_btn)
 
         save_btn = QPushButton("Save as CSV")
-        save_btn.setFont(pixel_font)
         save_btn.clicked.connect(self._on_save_recommendations_csv)
         buttons.addWidget(save_btn)
 
-        layout.addLayout(buttons)
+        buttons.addStretch(1)
+        outer.addLayout(buttons)
 
-        # Footer note linking to stories/subtasks
-        foot = QLabel(
-            "Notes: Uses posture history (1C) → maps issues to query terms (1B) → applies confidence weights (1A)."
-        )
-        foot.setFont(pixel_font)
-        foot.setStyleSheet("color: #333; background: transparent;")
-        foot.setAlignment(Qt.AlignCenter)
-        layout.addWidget(foot)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(root)
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(scroll)
+        self.recommendations_tab.setLayout(main_layout)
 
-        # Set it all
-        container = QWidget()
-        container.setLayout(layout)
-        outer = QVBoxLayout()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(container)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
-        outer.addWidget(scroll)
-        self.recommendations_tab.setLayout(outer)
+        self._on_refresh_products_from_csv()
 
 
     def init_live_tab(self):
