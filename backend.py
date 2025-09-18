@@ -12,7 +12,9 @@ import os
 import time
 from os.path import exists
 from urllib.request import urlretrieve
+from log import record_frame
 from posture_image_logger import save_posture_image, initialize_folders
+import joblib
 
 # Globals for settings hooks in relation to pygame.
 notification_volume = 50  # Default volume (0-100)
@@ -46,6 +48,9 @@ if not exists(face_model):
     face_model = urlretrieve(
         "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
         "face_landmarker.task")[0]
+
+#bundle = joblib.load("models/posture_xgb_v1.pkl")
+#classifier_model = bundle["model"]
 
 last_log_time = time.time()
 
@@ -140,23 +145,6 @@ def get_face_landmarker():
         min_face_detection_confidence=0.5,
         min_tracking_confidence=0.5)
     return mp.tasks.vision.FaceLandmarker.create_from_options(face_options)
-
-
-# data logger
-def log_posture_sample(features, label, frame=None, filename="posture_dataset.csv"):
-    header = list(features.keys()) + ["label"]
-    row = list(features.values()) + [label]
-
-    file_exists = os.path.exists(filename)
-    with open(filename, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        if not file_exists:
-            writer.writerow(header)
-        writer.writerow(row)
-    if frame is not None:  # Check if frame is available
-        # Save image with label
-        save_posture_image(frame, label)  # Save image to the correct label folder
-
 
 _last_log_time = 0
 
@@ -515,7 +503,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     else:
         # Fallback to pose-based ears if Face Mesh fails
         raw_head_tilt = left_ear.y - right_ear.y if left_ear.visibility > 0.5 and right_ear.visibility > 0.5 else 0
-        print(f"[DEBUG] Fallback to pose ear landmarks")
+        #print(f"[DEBUG] Fallback to pose ear landmarks")
 
     head_tilt_difference = abs(raw_head_tilt)
 
@@ -663,9 +651,9 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
                 landmark_source = "Face Mesh cheeks" if (
                             left_cheek is not None and right_cheek is not None) else "Pose ears"
-                print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
-                      f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
-                      f"Source: {landmark_source}, Score: {head_tilt_score}/3")
+                #print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
+                      #f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
+                      #f"Source: {landmark_source}, Score: {head_tilt_score}/3")
 
             # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
             torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)
@@ -690,10 +678,10 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             combined_confidence = min(base_combined + clavicle_penalty, 7)
 
             # Debug output for clavicle tracking
-            if posture_drop_score > 1:
-                print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
-                      f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
-                      f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
+            #if posture_drop_score > 1:
+                #print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
+                      #f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
+                      #f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
 
             # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(combined_confidence, 7)
@@ -708,20 +696,21 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             # auto dataset logger(logs once every 5 seconds)
             global last_logged_time
             current_time = time.time()
-            if not is_manual_labeling and current_time - last_logged_time >= 5:
+            if not is_manual_labeling:# and current_time - last_logged_time >= 5:
                 features = {
                     "head_tilt": normalized_head_tilt,
                     "clavicle_drop_pct": clavicle_y_pct,
                     "face_lean": face_lean,
                     "shoulder_ear_pct": shoulder_ear_percentage,
-                    "torso_lean_prc": torso_percentage,
-                    "looking_down_pct": looking_down_percentage
+                    "torso_lean_pct": torso_percentage,
+                    "looking_down_pct": looking_down_percentage,
+                    "label": stable_posture
                 }
                 # global latest_features
                 global latest_features
                 latest_features = features
-                log_posture_sample(features, stable_posture)
-                print(f"[LOG] logged posture sample: {stable_posture}")
+                record_frame(features)
+                #print(f"[LOG] logged posture sample: {stable_posture}")
                 last_logged_time = current_time
 
             global last_voice_log_time
@@ -733,11 +722,12 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                     "clavicle_drop_pct": clavicle_y_pct,
                     "face_lean": face_lean,
                     "shoulder_ear_pct": shoulder_ear_percentage,
-                    "torso_lean_prc": torso_percentage,
-                    "looking_down_pct": looking_down_percentage
+                    "torso_lean_pct": torso_percentage,
+                    "looking_down_pct": looking_down_percentage,
+                    "label": latest_voice_label
                 }
                 latest_features = voice_features
-                log_posture_sample(voice_features, latest_voice_label, frame=image)
+                record_frame(voice_features)
                 print(f"[VOICE] Logged {latest_voice_label.upper()} posture sample via voice.")
                 last_logged_time = current_time
                 last_voice_log_time = current_time
@@ -817,11 +807,11 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 # Move the main execution code into a separate function
 def run_standalone():
     """Run the standalone version with OpenCV window"""
+    global is_manual_labeling, is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
 
     # Define and start speech recognition thread only in standalone mode
     def listen_for_speech():
-        global is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
-        global latest_voice_label, is_manual_labeling
+        global latest_voice_label
         try:
             recognizer = sr.Recognizer()
             mic = sr.Microphone()
@@ -918,19 +908,19 @@ def run_standalone():
                     is_manual_labeling = not is_manual_labeling
                     print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
                 elif is_manual_labeling and key == ord('g'):
-                    label = "good"
                     if 'latest_features' in globals():
-                        log_posture_sample(latest_features, label, frame=annotated_image)
+                        latest_features["label"] = "good"
+                        record_frame(latest_features)
                         print(f"[MANUAL] logged GOOD posture sample.")
                 elif is_manual_labeling and key == ord('b'):
-                    label = "bad"
                     if 'latest_features' in globals():
-                        log_posture_sample(latest_features, label, frame=annotated_image)
+                        latest_features["label"] = "b"
+                        record_frame(latest_features)
                         print(f"[MANUAL] logged BAD posture sample.")
                 elif is_manual_labeling and key == ord('m'):
-                    label = "moderate"
                     if 'latest_features' in globals():
-                        log_posture_sample(latest_features, label, frame=annotated_image)
+                        latest_features["label"] = "m"
+                        record_frame(latest_features)
                         print(f"[MANUAL] Logged MODERATE posture sample.")
                 elif key == ord('c'):
                     calibration_start_time = time.time()
