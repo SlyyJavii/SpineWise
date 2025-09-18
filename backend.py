@@ -914,12 +914,12 @@ def run_standalone():
                         print(f"[MANUAL] logged GOOD posture sample.")
                 elif is_manual_labeling and key == ord('b'):
                     if 'latest_features' in globals():
-                        latest_features["label"] = "b"
+                        latest_features["label"] = "bad"
                         record_frame(latest_features)
                         print(f"[MANUAL] logged BAD posture sample.")
                 elif is_manual_labeling and key == ord('m'):
                     if 'latest_features' in globals():
-                        latest_features["label"] = "m"
+                        latest_features["label"] = "moderate"
                         record_frame(latest_features)
                         print(f"[MANUAL] Logged MODERATE posture sample.")
                 elif key == ord('c'):
