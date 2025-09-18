@@ -10,6 +10,7 @@ import numpy as np
 import pygame
 import os
 import time
+import keyboard
 from os.path import exists
 from urllib.request import urlretrieve
 from log import record_frame
@@ -120,9 +121,27 @@ posture_status_labels = {
 }
 
 # globals for data logger
-last_logged_time = 0  # for rate limiting dataset logging
 is_manual_labeling = False  # start in auto mode by default
 latest_voice_label = None  # To hold voice input while labeling mode is active
+latest_features = []
+label_override = "good"
+
+def logger_key_callback(event):
+    global is_manual_labeling, label_override
+    if event.name == 'l':
+        is_manual_labeling = not is_manual_labeling
+        print(f"[LOGGER] Manual labeling is {is_manual_labeling}")
+    elif is_manual_labeling and calibrated_thresholds and not is_calibrating:
+        if event.name == 'g':
+            label_override = "good"
+            print("[LOGGER] Manual label set to \"good\", maintain good posture")
+        elif event.name == 'm':
+            label_override = "moderate"
+            print("[LOGGER] Manual label set to \"moderate\", maintain moderate posture")
+        elif event.name == 'b':
+            label_override = "bad"
+            print("[LOGGER] Manual label set to \"bad\", maintain bad posture")
+keyboard.on_release(logger_key_callback)
 
 
 # Add function to create pose landmarker
@@ -426,9 +445,9 @@ def scale_metric(value, low_threshold, high_threshold, max_score=3):
 
 
 def analyze_posture(image, pose_landmarks, face_landmarks=None):
-    global is_calibrating, calibration_data, calibrated_thresholds, calibration_start_time, mode, countdown_duration, hold_duration, prev_facial_distances, prev_torso_distances, cache_idx
+    global is_calibrating, calibration_data, calibrated_thresholds, calibration_start_time, mode, countdown_duration, hold_duration, prev_facial_distances, prev_torso_distances, cache_idx, is_manual_labeling, label_override
     global start_time, loop_started, last_beep_time
-    global latest_voice_label, last_voice_log_time, latest_features
+    global latest_voice_label, last_voice_log_time
 
     side_label = ""
     status = "No pose detected"
@@ -693,45 +712,17 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             status = display_status
             color = posture_status_labels[stable_posture][1]
 
-            # auto dataset logger(logs once every 5 seconds)
-            global last_logged_time
-            current_time = time.time()
-            if not is_manual_labeling:# and current_time - last_logged_time >= 5:
-                features = {
-                    "head_tilt": normalized_head_tilt,
-                    "clavicle_drop_pct": clavicle_y_pct,
-                    "face_lean": face_lean,
-                    "shoulder_ear_pct": shoulder_ear_percentage,
-                    "torso_lean_pct": torso_percentage,
-                    "looking_down_pct": looking_down_percentage,
-                    "label": stable_posture
-                }
-                # global latest_features
-                global latest_features
-                latest_features = features
-                record_frame(features)
-                #print(f"[LOG] logged posture sample: {stable_posture}")
-                last_logged_time = current_time
-
-            global last_voice_log_time
-            if 'last_voice_log_time' not in globals():
-                last_voice_log_time = 0
-            if is_manual_labeling and latest_voice_label and (current_time - last_voice_log_time) > 1.5:
-                voice_features = {
-                    "head_tilt": normalized_head_tilt,
-                    "clavicle_drop_pct": clavicle_y_pct,
-                    "face_lean": face_lean,
-                    "shoulder_ear_pct": shoulder_ear_percentage,
-                    "torso_lean_pct": torso_percentage,
-                    "looking_down_pct": looking_down_percentage,
-                    "label": latest_voice_label
-                }
-                latest_features = voice_features
-                record_frame(voice_features)
-                print(f"[VOICE] Logged {latest_voice_label.upper()} posture sample via voice.")
-                last_logged_time = current_time
-                last_voice_log_time = current_time
-                latest_voice_label = None
+            features = {
+                "head_tilt": normalized_head_tilt,
+                "clavicle_drop_pct": clavicle_y_pct,
+                "face_lean": face_lean,
+                "shoulder_ear_pct": shoulder_ear_percentage,
+                "torso_lean_pct": torso_percentage,
+                "looking_down_pct": looking_down_percentage,
+                "label": stable_posture if not is_manual_labeling else label_override
+            }
+            record_frame(features)
+            #print(f"[LOG] logged posture sample: {stable_posture}")
 
             # Alert logic (using stable confidence to prevent false alarms)
             alert_threshold = 3
@@ -807,7 +798,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 # Move the main execution code into a separate function
 def run_standalone():
     """Run the standalone version with OpenCV window"""
-    global is_manual_labeling, is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration
+    global is_manual_labeling, is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration, latest_features
 
     # Define and start speech recognition thread only in standalone mode
     def listen_for_speech():
