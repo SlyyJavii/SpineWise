@@ -9,6 +9,10 @@ import numpy as np
 import pandas as pd
 import mediapipe as mp
 import threading
+
+from matplotlib.backends.backend_template import FigureCanvas
+from matplotlib.figure import Figure
+
 import backend
 import speech_recognition as sr
 
@@ -17,10 +21,12 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame, QVBoxLayout, QWidget,
     QTabWidget, QMainWindow, QFrame, QVBoxLayout,
     QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox, QHBoxLayout, QCheckBox, QFormLayout, QSlider,
-    QGroupBox, QProgressBar, QTableWidgetItem, QTableWidget, QGridLayout, QHeaderView, QToolButton, QMenu, QAction
+    QGroupBox, QProgressBar, QTableWidgetItem, QTableWidget, QGridLayout, QHeaderView, QToolButton, QMenu, QAction,
+    QListWidgetItem, QListWidget, QComboBox
 )
 from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
-from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
+from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve, QThread, QSize, pyqtSignal, QEvent, \
+    QTimer, QPoint
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker,
     draw_landmarks, normalize_lighting, is_calibrating,
@@ -271,6 +277,61 @@ class VideoThread(QThread):
         # Don't call wait() here - let the main thread handle it
         print("[VIDEO] Stop method complete (no wait called)")
 
+class NotificationPopup(QWidget):
+    """Popup window that shows a scrollable list of notifications."""
+    def __init__(self, parent=None, width=360, height=300):
+        super().__init__(parent, flags=Qt.Popup)
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(width, height)
+
+        self.list = QListWidget()
+        self.list.setSpacing(6)
+        self.list.setSelectionMode(QListWidget.SingleSelection)
+        self.list.itemClicked.connect(self._on_item_clicked)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(self.list)
+
+        # Styling of popup + items
+        self.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border: 2px solid #444;
+                border-radius: 8px;
+            }
+            QListWidget {
+                border: none;
+                padding: 6px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                margin: 2px;
+                border-radius: 6px;
+            }
+            QListWidget::item:hover {
+                background-color: #f0f8ff;
+            }
+        """)
+
+        # callback hook (App will assign)
+        self.on_click = None
+
+    def add_notification(self, text: str):
+        item = QListWidgetItem(text)
+        item.setSizeHint(QSize(self.width() - 24, 48))
+        # Insert at top
+        self.list.insertItem(0, item)
+
+    def clear_notifications(self):
+        self.list.clear()
+
+    def _on_item_clicked(self, item: QListWidgetItem):
+        if self.on_click:
+            self.on_click(item.text())
+        # Optionally close popup after click
+        self.close()
 
 class App(QMainWindow):
     def __init__(self):
@@ -310,43 +371,8 @@ class App(QMainWindow):
         main_layout = QVBoxLayout()
         main_layout.setAlignment(Qt.AlignTop)
         main_layout.setContentsMargins(20, 20, 20, 20)
-
-
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-
-        title_font = QFont("Arial", 12)
-        title = QLabel("SpineWise")
-        title.setFont(title_font)
-        title.setStyleSheet("color: black;")
-        title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        header_layout.addWidget(title)
-
-        header_layout.addStretch()
-
-        self.notif_btn = QToolButton()
-        self.notif_btn.setText("Notifications")
-        self.notif_btn.setPopupMode(QToolButton.InstantPopup)
-        self.notif_menu = QMenu(self)
-        placeholder = QAction("No notifications", self)
-        placeholder.setEnabled(False)
-        self.notif_menu.addAction(placeholder)
-        self.notif_btn.setMenu(self.notif_menu)
-
-        icon_path = os.path.join(os.path.dirname(__file__), "assets/icons/bell.png")
-        if os.path.exists(icon_path):
-            try:
-                self.notif_btn.setIcon(QIcon(icon_path))
-            except Exception:
-                pass
-
-        self.notif_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.notif_btn.setAutoRaise(True)  # flat look
-        self.notif_btn.setFixedHeight(30)
-        header_layout.addWidget(self.notif_btn, 0, Qt.AlignRight)
-
-        main_layout.addLayout(header_layout)
-
+        header = self._build_header()
+        main_layout.addLayout(header)
         main_layout.addWidget(self.tab_widget)
 
         # Set as central widget
@@ -386,11 +412,11 @@ class App(QMainWindow):
         self.live_tab = QWidget()
         self.live_tab.setAttribute(Qt.WA_StyledBackground, True)
         self.live_tab.setStyleSheet("background-color: transparent;")
-        self.log_tab = QWidget()
+        self.analytics_tab = QWidget()
         self.settings_tab = QWidget()
 
-        self.tab_widget.addTab(self.live_tab, "Live Posture")
-        self.tab_widget.addTab(self.log_tab, "Posture Log")
+        self.tab_widget.addTab(self.live_tab, "Dashboard")
+        self.tab_widget.addTab(self.analytics_tab, "Posture Stats")
         self.tab_widget.addTab(self.settings_tab, "Settings")
         self.tab_widget.setStyleSheet("""
             QTabBar {
@@ -451,12 +477,9 @@ class App(QMainWindow):
 
         # Then initialize tabs
         self.init_live_tab()
-        self.init_log_tab()
+        self.init_analytics_tab()
         self.init_settings_tab()
 
-
-
-       
         # Start speech recognition thread
         self.speech_thread.start()
 
@@ -470,8 +493,50 @@ class App(QMainWindow):
             # Ensure default behavior and avoid forcing a broken brush
             self.setAutoFillBackground(False)
         super().resizeEvent(event)
-    
 
+    def _build_header(self):
+        """Return a QHBoxLayout containing the app title on the left and a nicer popup button on the right."""
+        h = QHBoxLayout()
+        h.setContentsMargins(0, 0, 0, 0)
+
+        # Left: title
+        title = QLabel("SpineWise")
+        title_font = QFont()
+        title_font.setPointSize(14)
+        title.setFont(title_font)
+        title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        h.addWidget(title, 1)
+
+        # Right: notification toolbutton with nice popup
+        self.notif_btn = QToolButton()
+        self.notif_btn.setText("Notifications")
+        self.notif_btn.setAutoRaise(True)
+        self.notif_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.notif_btn.setFixedHeight(30)
+        # Use a popup widget instead of QMenu
+        self.notif_popup = NotificationPopup(self, width=360, height=260)
+
+        # When the button is pressed, toggle popup visibility & position it
+        def _toggle_popup():
+            if self.notif_popup.isVisible():
+                self.notif_popup.hide()
+            else:
+                # position under button (align right edge with button)
+                btn_pos = self.notif_btn.mapToGlobal(QPoint(0, self.notif_btn.height()))
+                # shift popup so its right edges align with button's right
+                global_x = btn_pos.x() + self.notif_btn.width() - self.notif_popup.width()
+                self.notif_popup.move(global_x, btn_pos.y())
+                self.notif_popup.show()
+
+        self.notif_btn.clicked.connect(_toggle_popup)
+
+        # Maintain an internal list and count
+        self.notifications = []
+        # small helper label/count in the button text
+        self._update_notif_button_text()
+
+        h.addWidget(self.notif_btn, 0, Qt.AlignRight)
+        return h
 
     def init_live_tab(self):
        # Create a transparent wrapper widget
@@ -635,43 +700,82 @@ class App(QMainWindow):
         self.live_tab.setLayout(QVBoxLayout())
         self.live_tab.layout().addWidget(live_wrapper)
 
-
-    def init_log_tab(self):
+    def init_analytics_tab(self):
+        """FOR JASON. This was a bit of a hassle because I don't know what direction you'll take this, nor do I know how"""
+        """to potentially thread any data through here, but I've set this up as best I can."""
+        # Main container layout
         layout = QVBoxLayout()
-
-        title = QLabel("Posture Data Log")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
+        title = QLabel("Posture Analytics")
+        title.setFont(QFont("Press Start 2P", 14))
+        title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
-        
-        #EMDYA CHANGE - Created a table widget for a more aesthetically pleasing log display
-        self.log_table = QTableWidget()
-        self.log_table.setColumnCount(6)
-        self.log_table.setHorizontalHeaderLabels(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
-        self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.log_table.setEditTriggers(QTableWidget.NoEditTriggers)  # Make it read-only
-        layout.addWidget(self.log_table)
 
-        #Buttons for log management
-        btn_layout = QHBoxLayout()
-    
-        load_button = QPushButton("📊 Load Posture Log")
-        load_button.clicked.connect(self.load_log)
-        btn_layout.addWidget(load_button)
+        self.figure = Figure(figsize=(6, 3))
+        self.canvas = FigureCanvas(self.figure)
 
-        refresh_button = QPushButton("🔄 Refresh")
-        refresh_button.clicked.connect(self.load_log)
-        btn_layout.addWidget(refresh_button)
+        # Placeholder controls: refresh and some options
+        controls_layout = QHBoxLayout()
+        self.refresh_plot_btn = QPushButton("🔄 Refresh Plot")
+        self.refresh_plot_btn.setFont(QFont("Press Start 2P", 9))
+        self.refresh_plot_btn.clicked.connect(self.update_analytics_plot)
+        controls_layout.addWidget(self.refresh_plot_btn)
 
-        layout.addLayout(btn_layout)
-        self.log_tab.setLayout(layout)
+        # A small placeholder dropdown for which metric to plot
+        self.metric_combo = QComboBox()
+        self.metric_combo.addItems(["Confidence (placeholder)", "Head Tilt", "Clavicle Drop"])
+        self.metric_combo.currentIndexChanged.connect(self.update_analytics_plot)
+        controls_layout.addWidget(self.metric_combo)
 
-        
+        controls_layout.addStretch()
+        layout.addLayout(controls_layout)
 
-        
+        # A small textual placeholder / description under the plot
+        desc = QLabel("This analytics panel will show posture metrics over time. NOT FINAL IT'S FAR FROM FINAL.")
+        desc.setFont(QFont("Press Start 2P", 9))
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
 
-         # Set layout to tab
-        self.log_tab.setLayout(layout)
-        
+        # Wire up tab
+        self.analytics_tab.setLayout(layout)
+
+        # Make an initial plot
+        self.update_analytics_plot()
+
+    def update_analytics_plot(self):
+        """(Re)draw the placeholder analytics plot. ALL OF THIS IS DUD RNG"""
+        try:
+            # Placeholder data generator just for UI assurance purposes.
+            # Jason this is where you'd write the CSV translation stuff HOPEFULLY.
+            # Not sure if it's better to do it in backend.py or a new py file or here. Shrug!
+            # X axis: recent timestamps (strings) or frame indices
+            n = 30
+            x = list(range(n))
+            # Choose metric based on combo selection (placeholder random/smooth data)
+            sel = self.metric_combo.currentText() if hasattr(self, "metric_combo") else "Confidence (placeholder)"
+            rng = np.linspace(0, 4 * np.pi, n)
+            if "Confidence" in sel:
+                y = (np.sin(rng) + 1.0) * 3 + np.random.normal(scale=0.3, size=n)  # pseudo confidence
+                ylabel = "Confidence (0-7 scaled)"
+            elif "Head Tilt" in sel:
+                y = np.abs(np.sin(rng)) * 0.05 + np.random.normal(scale=0.005, size=n)
+                ylabel = "Head tilt (normalized)"
+            else:
+                y = np.abs(np.cos(rng)) * 0.03 + np.random.normal(scale=0.004, size=n)
+                ylabel = "Nerd Neck/Clavicle Tilt"
+
+            # Clear figure and plot
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            ax.plot(x, y, marker='o', linewidth=1)
+            ax.set_title(f"{sel} over time")
+            ax.set_xlabel("Sample")
+            ax.set_ylabel(ylabel)
+            ax.grid(True)
+
+            self.figure.tight_layout()
+            self.canvas.draw()
+        except Exception as e:
+            print("[ANALYTICS] Failed to update plot:", e)
 
     def init_settings_tab(self):
         pixel_font = QFont("Press Start 2P", 10)
@@ -1064,7 +1168,6 @@ class App(QMainWindow):
         outer_layout = QVBoxLayout()
         outer_layout.addWidget(settings_scroll)
         self.settings_tab.setLayout(outer_layout)
-        
 
     def toggle_landmark_visibility(self, state):
         self.show_landmarks = (state == Qt.Checked)
@@ -1186,21 +1289,22 @@ class App(QMainWindow):
                 "font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
 
     def add_notification(self, text: str):
-        """Add a new notification at the top of the dropdown menu."""
-        # Remove placeholder if present
-        actions = self.notif_menu.actions()
-        if len(actions) == 1 and actions[0].text() == "No notifications":
-            self.notif_menu.clear()
+        """Add and show notification in the popup; update the button badge text."""
+        # prepend to internal list
+        self.notifications.insert(0, text)
+        # add to popup list
+        self.notif_popup.add_notification(text)
+        # update badge text
+        self._update_notif_button_text()
 
-        # Create the QAction and insert it at top
-        act = QAction(text, self)
-        # When clicked, call a handler (open a recommendation page, etc.)
-        act.triggered.connect(lambda checked=False, t=text: self._on_notification_clicked(t))
-        # Insert at beginning
-        if self.notif_menu.actions():
-            self.notif_menu.insertAction(self.notif_menu.actions()[0], act)
+    def _update_notif_button_text(self):
+        """Set button text to include unread count (simple badge)."""
+        n = len(self.notifications)
+        if n == 0:
+            self.notif_btn.setText("Notifications")
         else:
-            self.notif_menu.addAction(act)
+            # show count next to label
+            self.notif_btn.setText(f"Notifications ({n})")
 
     def clear_notifications(self):
         """Clear the notification list and restore placeholder."""
