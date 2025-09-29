@@ -10,7 +10,6 @@ import numpy as np
 import pygame
 import os
 import time
-import keyboard
 from os.path import exists
 from urllib.request import urlretrieve
 from log import record_frame
@@ -123,26 +122,16 @@ posture_status_labels = {
 # globals for data logger
 is_manual_labeling = False  # start in auto mode by default
 latest_voice_label = None  # To hold voice input while labeling mode is active
-latest_features = []
+latest_features = None
 label_override = "good"
 
-def logger_key_callback(event):
-    global is_manual_labeling, label_override
-    if event.name == 'l':
-        is_manual_labeling = not is_manual_labeling
-        print(f"[LOGGER] Manual labeling is {is_manual_labeling}")
-    elif is_manual_labeling and calibrated_thresholds and not is_calibrating:
-        if event.name == 'g':
-            label_override = "good"
-            print("[LOGGER] Manual label set to \"good\", maintain good posture")
-        elif event.name == 'm':
-            label_override = "moderate"
-            print("[LOGGER] Manual label set to \"moderate\", maintain moderate posture")
-        elif event.name == 'b':
-            label_override = "bad"
-            print("[LOGGER] Manual label set to \"bad\", maintain bad posture")
-keyboard.on_release(logger_key_callback)
 
+
+def reset_calibration_buffer():
+    global calibration_data
+
+    keys = list(calibration_data.keys())
+    calibration_data = {k: [] for k in keys}
 
 # Add function to create pose landmarker
 def get_pose_landmarker():
@@ -354,7 +343,7 @@ def listen_for_speech():
                     if "calibrate" in command:
                         calibration_start_time = time.time()
                         is_calibrating = True
-                        calibration_data = {k: [] for k in calibration_data}
+                        reset_calibration_buffer()
                         print("Calibration countdown started. Get ready...")
                     elif "exit" in command:
                         print("[SpeechRecognition] Escape command received. Exiting program...")
@@ -724,6 +713,9 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             record_frame(features)
             #print(f"[LOG] logged posture sample: {stable_posture}")
 
+            global latest_features
+            latest_features = features.copy()
+
             # Alert logic (using stable confidence to prevent false alarms)
             alert_threshold = 3
 
@@ -799,10 +791,11 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 def run_standalone():
     """Run the standalone version with OpenCV window"""
     global is_manual_labeling, is_calibrating, calibration_data, calibration_start_time, mode, countdown_duration, hold_duration, latest_features
+    global latest_voice_label, label_override
 
     # Define and start speech recognition thread only in standalone mode
     def listen_for_speech():
-        global latest_voice_label
+        global calibration_start_time, is_calibrating, calibration_data, latest_voice_label
         try:
             recognizer = sr.Recognizer()
             mic = sr.Microphone()
@@ -819,7 +812,7 @@ def run_standalone():
                         if "calibrate" in command:
                             calibration_start_time = time.time()
                             is_calibrating = True
-                            calibration_data = {k: [] for k in calibration_data}
+                            reset_calibration_buffer()
                             print("Calibration countdown started. Get ready...")
                         elif "exit" in command:
                             print("[SpeechRecognition] Escape command received. Exiting program...")
@@ -899,24 +892,30 @@ def run_standalone():
                     is_manual_labeling = not is_manual_labeling
                     print(f"[MODE] manual labeling mode {'ENABLED' if is_manual_labeling else 'DISABLED'}")
                 elif is_manual_labeling and key == ord('g'):
-                    if 'latest_features' in globals():
-                        latest_features["label"] = "good"
-                        record_frame(latest_features)
-                        print(f"[MANUAL] logged GOOD posture sample.")
+                    if latest_features is not None:
+                        sample = latest_features.copy()
+                        sample["label"] = "good"
+                        record_frame(sample)
+                        label_override = "good"
+                        print(f"[MANUAL] logged GOOD posture sample.")        
                 elif is_manual_labeling and key == ord('b'):
-                    if 'latest_features' in globals():
-                        latest_features["label"] = "bad"
-                        record_frame(latest_features)
+                    if latest_features is not None:
+                        sample = latest_features.copy()
+                        sample["label"] = "bad"
+                        record_frame(sample)
+                        label_override = "bad"
                         print(f"[MANUAL] logged BAD posture sample.")
                 elif is_manual_labeling and key == ord('m'):
-                    if 'latest_features' in globals():
-                        latest_features["label"] = "moderate"
-                        record_frame(latest_features)
-                        print(f"[MANUAL] Logged MODERATE posture sample.")
+                    if latest_features is not None:
+                        sample = latest_features.copy()
+                        sample["label"] = "moderate"
+                        record_frame(sample)
+                        label_override = "moderate"
+                        print(f"[MANUAL] logged moderate posture sample.")
                 elif key == ord('c'):
                     calibration_start_time = time.time()
                     is_calibrating = True
-                    calibration_data = {k: [] for k in calibration_data}
+                    reset_calibration_buffer()
                 elif key == ord('f'):
                     # Toggle debug face mesh visualization
                     import builtins
