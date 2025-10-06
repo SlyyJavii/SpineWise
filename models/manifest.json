@@ -1,7 +1,0 @@
-{
-  "current_model": "posture_svm_v1.pkl",
-  "schema_version": "1.0",
-  "feature_order": ["head_tilt","clavicle_drop_pct","face_lean","shoulder_ear_pct","torso_lean_prc","looking_down_pct"],
-  "class_labels": ["bad","moderate","good"],
-  "trained_on": "2025-09-10"
-}
