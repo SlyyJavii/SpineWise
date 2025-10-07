@@ -1,36 +1,29 @@
-# Enhanced spinewise_gui.py with speech recognition integration
-
-import os
-import queue
-
-import cv2
-import time
-import numpy as np
-import pandas as pd
-import mediapipe as mp
-import threading
-import backend
-import speech_recognition as sr
-
-
+import os, queue, cv2, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, speech_recognition as sr
 from PyQt5.QtWidgets import (
-    QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame, QVBoxLayout, QWidget, QTabWidget, QMainWindow,QFrame,QVBoxLayout,
-    QFileDialog, QTextEdit, QDoubleSpinBox, QScrollArea, QSpinBox,QHBoxLayout, QCheckBox, QFormLayout,QSlider,QGroupBox, QProgressBar, QTableWidgetItem,QTableWidget, QGridLayout,QHeaderView,
-    QAction, QLineEdit
+    QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame,
+    QVBoxLayout, QWidget, QTabWidget, QMainWindow, QFileDialog, QTextEdit, QDoubleSpinBox,
+    QScrollArea, QSpinBox, QHBoxLayout, QCheckBox, QFormLayout, QSlider, QGroupBox, QProgressBar,
+    QTableWidgetItem, QTableWidget, QGridLayout, QHeaderView, QAction, QLineEdit
 )
-from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
-from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve,QThread, QSize, pyqtSignal, QEvent, QTimer
+from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPainter, QColor
+from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve, QThread, pyqtSignal, QEvent, QTimer
+
 from backend import (
-    analyze_posture, get_pose_landmarker, get_face_landmarker,
-    draw_landmarks, normalize_lighting, is_calibrating,
-    calibration_start_time, calibration_data, set_gui_mode
+    analyze_posture, get_pose_landmarker, get_face_landmarker, draw_landmarks,
+    normalize_lighting, is_calibrating, calibration_start_time, calibration_data,
+    set_gui_mode
 )
 
+# theme importing
+from spinewise_theme import (
+    apply_palette, APP_QSS, RECS_QSS, PRODUCT_CARD_QSS, LIVE_IMAGE_QSS, STATUS_PANEL_QSS,
+    BTN_SUCCESS_QSS, POPUP_FRAME_QSS, DOT_QSS, posture_style, voice_status_style
+)
 
+# speech thread
 class SpeechRecognitionThread(QThread):
-    """Thread for continuous speech recognition"""
-    command_detected = pyqtSignal(str)  # Signal to emit recognized commands
-    status_update = pyqtSignal(str)  # Signal for status updates
+    command_detected = pyqtSignal(str)
+    status_update = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -40,416 +33,183 @@ class SpeechRecognitionThread(QThread):
         self.microphone = None
         self.show_landmarks = False
 
-    
-        
     def run(self):
-        """Main speech recognition loop"""
         try:
             self.recognizer = sr.Recognizer()
-
-            # Try to find the best microphone
-            mic_list = sr.Microphone.list_microphone_names()
-            print(f"[SPEECH] Available microphones: {mic_list}")
-
-            # Use default microphone
             self.microphone = sr.Microphone()
-
-            # Much more aggressive settings for better pickup
-            self.recognizer.energy_threshold = 100  # Even lower threshold
+            self.recognizer.energy_threshold = 100
             self.recognizer.dynamic_energy_threshold = True
-            self.recognizer.pause_threshold = 0.5  # Shorter pause detection
-            self.recognizer.phrase_threshold = 0.2  # More sensitive phrase detection
-            self.recognizer.non_speaking_duration = 0.3  # Shorter non-speaking detection
-
-            # Adjust for ambient noise once at startup
-            print("[SPEECH] Adjusting for ambient noise...")
+            self.recognizer.pause_threshold = 0.5
+            self.recognizer.phrase_threshold = 0.2
+            self.recognizer.non_speaking_duration = 0.3
             self.status_update.emit("Calibrating microphone...")
-
             with self.microphone as source:
-                # Much shorter adjustment to preserve low threshold
                 self.recognizer.adjust_for_ambient_noise(source, duration=1)
-                # Force lower threshold if adjustment made it too high
-                if self.recognizer.energy_threshold > 300:
-                    self.recognizer.energy_threshold = 200
-                print(f"[SPEECH] Final energy threshold: {self.recognizer.energy_threshold}")
-
-            print("[SPEECH] Speech recognition ready")
+            if self.recognizer.energy_threshold > 300:
+                self.recognizer.energy_threshold = 200
             self.status_update.emit("Ready - try saying 'start'")
-
             while self._run_flag:
-                if self.listening_enabled:
-                    try:
-                        # Listen for audio with timeout
-                        with self.microphone as source:
-                            print("[SPEECH] Listening... (say 'start', 'stop', 'calibrate', or 'exit')")
-                            self.status_update.emit(" Listening...")
-                            
-                            # Even longer timeout and phrase limit for better capture
-                            audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=5)
-                            
-                        print("[SPEECH]  Audio captured, processing...")
-                        self.status_update.emit("🔄 Processing...")
-
-                        # Try multiple recognition methods for better accuracy
-                        command = None
-                        try:
-                            # Primary: Google Speech Recognition
-                            command = self.recognizer.recognize_google(audio, language='en-US').lower().strip()
-                            print(f"[SPEECH]  Google recognized: '{command}'")
-                        except:
-                            try:
-                                # Fallback: Google with different settings
-                                command = self.recognizer.recognize_google(audio, language='en', show_all=False).lower().strip()
-                                print(f"[SPEECH] Google fallback recognized: '{command}'")
-                            except:
-                                print("[SPEECH]  Both Google recognition attempts failed")
-                                continue
-
-                        if command:
-                            # Emit the recognized command
-                            self.command_detected.emit(command)
-                            self.status_update.emit(f"✅ Heard: '{command}'")
-
-                    except sr.WaitTimeoutError:
-                        # Timeout is normal, just continue
-                        print("[SPEECH] ⏰ Listening timeout (normal)")
-                        continue
-                    except sr.UnknownValueError:
-                        # Could not understand audio
-                        print("[SPEECH]  Could not understand audio")
-                        self.status_update.emit(" Could not understand - try again")
-                        continue
-                    except sr.RequestError as e:
-                        print(f"[SPEECH]  API error: {e}")
-                        self.status_update.emit(f" Speech API error: Check internet")
-                        time.sleep(5)  # Wait before retrying
-                        continue
-                    except Exception as e:
-                        print(f"[SPEECH]  Unexpected error: {e}")
-                        continue
-                else:
-                    # Not listening, sleep briefly
+                if not self.listening_enabled:
                     time.sleep(0.5)
-
+                    continue
+                try:
+                    with self.microphone as source:
+                        self.status_update.emit("Listening...")
+                        audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=5)
+                    self.status_update.emit("Processing...")
+                    command = None
+                    try:
+                        command = self.recognizer.recognize_google(audio, language='en-US').lower().strip()
+                    except Exception:
+                        try:
+                            command = self.recognizer.recognize_google(audio, language='en', show_all=False).lower().strip()
+                        except Exception:
+                            continue
+                    if command:
+                        self.command_detected.emit(command)
+                        self.status_update.emit(f"Heard: '{command}'")
+                except sr.WaitTimeoutError:
+                    continue
+                except sr.UnknownValueError:
+                    self.status_update.emit("Could not understand")
+                    continue
+                except sr.RequestError:
+                    self.status_update.emit("Speech API error")
+                    time.sleep(5)
+                    continue
+                except Exception:
+                    continue
         except Exception as e:
-            print(f"[SPEECH] Failed to initialize: {e}")
-            self.status_update.emit(f" Mic initialization failed: {e}")
-    
-    def enable_listening(self):
-        """Enable speech recognition"""
-        self.listening_enabled = True
-        print("[SPEECH] Speech recognition enabled")
+            self.status_update.emit(f"Mic init failed: {e}")
 
-    def disable_listening(self):
-        """Disable speech recognition"""
-        self.listening_enabled = False
-        print("[SPEECH] Speech recognition disabled")
-
+    def enable_listening(self): self.listening_enabled = True
+    def disable_listening(self): self.listening_enabled = False
     def stop(self):
-        """Stop the speech recognition thread"""
         self._run_flag = False
         self.listening_enabled = False
         self.wait()
 
-
+# video thread
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     update_stats_signal = pyqtSignal(str)
 
-    def __init__(self, show_landmarks = False):
+    def __init__(self, show_landmarks=False):
         super().__init__()
-        self._run_flag = True  # Make sure this is always True when created
+        self._run_flag = True
         self.pose_landmarker = None
         self.face_landmarker = None
         self.raw_queue = None
         self.processed_queue = None
         self.show_landmarks = show_landmarks
-        print("[VIDEO] VideoThread initialized with _run_flag = True")
 
-    def set_landmark_visibility(self, show_landmarks):
-        self.show_landmarks = show_landmarks
+    def set_landmark_visibility(self, show_landmarks): self.show_landmarks = show_landmarks
 
     def process_image_queue(self):
         with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
             while self._run_flag:
                 frame = self.raw_queue.get()
-
                 frame = normalize_lighting(frame)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                # Create MediaPipe image objects
                 timestamp = int(round(time.time() * 1000))
                 pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
                 face_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-
-                # Get results
                 pose_results = pose_landmarker.detect_for_video(pose_image, timestamp)
                 face_results = face_landmarker.detect_for_video(face_image, timestamp)
-
-                # Create a copy for annotation
-                annotated_image = np.copy(frame)
-
+                annotated = np.copy(frame)
                 if pose_results.pose_landmarks:
-                    # Don't draw landmarks - keep clean video feed for GUI
-                    # draw_landmarks(annotated_image, pose_results.pose_landmarks)
-                     #draw landmarks only if setting is enabled
                     if self.show_landmarks:
-                        draw_landmarks(annotated_image, pose_results.pose_landmarks)
-
-                    # Analyze posture (this still works without drawing landmarks)
+                        draw_landmarks(annotated, pose_results.pose_landmarks)
                     result = analyze_posture(
-                        annotated_image,
+                        annotated,
                         pose_results.pose_landmarks[0],
                         face_results.face_landmarks if face_results.face_landmarks else None
                     )
                     self.update_stats_signal.emit(result)
                 else:
                     self.update_stats_signal.emit("No pose detected")
-
-                # Convert to RGB for Qt (now shows clean video without landmarks)
-                rgb_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_image.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                # self.change_pixmap_signal.emit(qt_image)
+                rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                qt_image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
                 self.processed_queue.put(qt_image)
 
     def run(self):
-        print(f"[INFO] VideoThread started with _run_flag = {self._run_flag}")
-
-        # Create landmarkers
         self.pose_landmarker = get_pose_landmarker()
         self.face_landmarker = get_face_landmarker()
         self.raw_queue = queue.Queue()
         self.processed_queue = queue.Queue()
-
-        threading.Thread(target=self.process_image_queue).start()
-
+        threading.Thread(target=self.process_image_queue, daemon=True).start()
         cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("[ERROR] Cannot open camera")
-            return
-
+        if not cap.isOpened(): return
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-
-        # Set camera properties for better quality
-        # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        # cap.set(cv2.CAP_PROP_FPS, 30)
-
-        print(f"[VIDEO] About to enter main loop with _run_flag = {self._run_flag}")
-
         try:
-
             while self._run_flag:
                 ret, frame = cap.read()
-                if not ret:
-                    print("[VIDEO] Failed to read frame")
-                    continue
-
+                if not ret: continue
                 self.raw_queue.put(frame)
-
                 processed_frame = self.processed_queue.get()
                 self.change_pixmap_signal.emit(processed_frame)
-
-            print(f"[VIDEO] Exited main loop with _run_flag = {self._run_flag}")
-
-        except Exception as e:
-            print(f"[VIDEO] Exception in video thread: {e}")
+        except Exception:
+            pass
         finally:
-            print("[VIDEO] Releasing camera...")
             cap.release()
-            print("[VIDEO] Camera released, thread ending normally")
 
     def stop(self):
-        """Stop the video thread gracefully without closing app"""
-        print("[VIDEO] Stop method called...")
         self._run_flag = False
-        print("[VIDEO] Run flag set to False")
 
-        # Don't call wait() here - let the main thread handle it
-        print("[VIDEO] Stop method complete (no wait called)")
-
-
+# product card
 class ProductCard(QFrame):
     def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, parent=None):
         super().__init__(parent)
         self.setObjectName("ProductCard")
-        self.setStyleSheet("""
-            QFrame#ProductCard {
-                background: #FFFFFF;
-                border: 1px solid #D5E3F4;
-                border-radius: 12px;
-            }
-            QLabel#CardTitle {
-                color: #0F3D66; font-weight: 600; font-size: 14px;
-            }
-            QLabel#Pill {
-                color: #2F6EA9; background: #E8F2FF;
-                padding: 2px 8px; border-radius: 10px; font-size: 11px;
-            }
-            QLabel#Why { color: #3E4C5E; }
-            QLabel#Meta { color: #5E6A7D; }
-            QLabel#Price { color: #0B5CAD; font-weight: 600; }
-        """)
-
+        self.setStyleSheet(PRODUCT_CARD_QSS)
         v = QVBoxLayout(self)
-        # Title row
-        title_lbl = QLabel(title or "—"); title_lbl.setObjectName("CardTitle"); title_lbl.setWordWrap(True)
-        pill = QLabel(category or "—"); pill.setObjectName("Pill")
-        top = QHBoxLayout(); top.addWidget(title_lbl, 1); top.addWidget(pill, 0, Qt.AlignRight)
-        v.addLayout(top)
-
-        why_lbl = QLabel(why or "—"); why_lbl.setObjectName("Why"); why_lbl.setWordWrap(True)
-        v.addWidget(why_lbl)
-
-        meta = []
+        title_lbl = QLabel(title or "—")
+        title_lbl.setObjectName("CardTitle")
+        title_lbl.setWordWrap(True)
+        pill = QLabel(category or "—")
+        pill.setObjectName("Pill")
+        top = QHBoxLayout(); top.addWidget(title_lbl, 1); top.addWidget(pill, 0, Qt.AlignRight); v.addLayout(top)
+        why_lbl = QLabel(why or "—"); why_lbl.setObjectName("Why"); why_lbl.setWordWrap(True); v.addWidget(why_lbl)
+        meta = []; 
         if rating: meta.append(f"⭐ {rating}")
         if reviews: meta.append(f"({reviews} reviews)")
-        meta_lbl = QLabel(" ".join(meta) if meta else " "); meta_lbl.setObjectName("Meta")
-        v.addWidget(meta_lbl)
-
+        meta_lbl = QLabel(" ".join(meta) if meta else " "); meta_lbl.setObjectName("Meta"); v.addWidget(meta_lbl)
         bottom = QHBoxLayout()
-        price_lbl = QLabel(price_text or "—"); price_lbl.setObjectName("Price")
-        bottom.addWidget(price_lbl)
+        price_lbl = QLabel(price_text or "—"); price_lbl.setObjectName("Price"); bottom.addWidget(price_lbl)
         if url:
-            link = QLabel(f'<a href="{url}">Open</a>')
-            link.setOpenExternalLinks(True)
-            bottom.addStretch(1)
-            bottom.addWidget(link)
+            link = QLabel(f'<a href="{url}">Open</a>'); link.setOpenExternalLinks(True); bottom.addStretch(1); bottom.addWidget(link)
         v.addLayout(bottom)
 
+# main window
 class App(QMainWindow):
     def __init__(self):
         super().__init__()
-        font_path = os.path.join(os.path.dirname(__file__), "assets/fonts/PressStart2P-Regular.ttf")
-        font_id = QFontDatabase.addApplicationFont(font_path)
-        if font_id == -1:
-            print("❌ Failed to load pixel font")
-        else:
-            loaded_font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
-            print(f"✅ Loaded font: {loaded_font_family}")
-        
-        # CRITICAL: Set GUI mode to prevent backend speech recognition conflicts
         set_gui_mode(True)
-
         self.setWindowTitle("SpineWise Posture App - With Voice Control")
         self.setGeometry(100, 100, 1400, 900)
 
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-        self.tab_widget.setMinimumHeight(60)
-        # Create a frame for the white tab background
-        self.tab_widget.setMinimumHeight(80)
-        tab_container = QFrame()
-        tab_container.setStyleSheet("""
-            QFrame {
-                    background-color: white;
-                    border-radius: 20px;
-                    padding: 15px;padding: 15px;
-                    margin-left: 100px;
-                    margin-right: 100px;
-                    }
-        """)
-        # Old Layout
-        # Layout inside the white container
-        #tab_layout = QVBoxLayout(tab_container)
-        #tab_layout.addWidget(self.tab_widget)
-        #tab_layout.setAlignment(Qt.AlignHCenter)
-       # tab_layout.setContentsMargins(0, 0, 0, 0)
+        apply_palette(self)
+        self.setStyleSheet(APP_QSS)
+        self.app_font = QFont("Segoe UI", 10)
 
-        # Outer layout for the whole window
-        #main_layout = QVBoxLayout()
-       # main_layout.addWidget(tab_container)  
-        main_layout = QVBoxLayout()
-        main_layout.setAlignment(Qt.AlignTop)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.addWidget(self.tab_widget)
-  
+        self.tab_widget = QTabWidget(); self.tab_widget.setElideMode(Qt.ElideRight)
+        main_layout = QVBoxLayout(); main_layout.setAlignment(Qt.AlignTop); main_layout.setContentsMargins(16,16,16,16); main_layout.addWidget(self.tab_widget)
+        central = QWidget(); central.setLayout(main_layout); self.setCentralWidget(central)
 
-        # Set as central widget
-        central_widget = QWidget()
-        central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)  
-        
-        menu = self.menuBar()
-        view_menu = menu.addMenu("View")
+        menu = self.menuBar(); view_menu = menu.addMenu("View")
+        rec_action = QAction("Recommendations", self); rec_action.triggered.connect(lambda: self.tab_widget.setCurrentWidget(self.recommendations_tab)); view_menu.addAction(rec_action)
 
-        rec_action = QAction("Recommendations", self)
-        rec_action.triggered.connect(lambda: self.tab_widget.setCurrentWidget(self.recommendations_tab))
-        view_menu.addAction(rec_action) 
-
-        background_path = os.path.join(os.path.dirname(__file__), "assets/sky_background.png")
-        self.bg_pixmap = QPixmap(background_path)
-
-        palette = QPalette()
-        palette.setBrush(QPalette.Window, QBrush(self.bg_pixmap.scaled(
-            self.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)))
-        self.setAutoFillBackground(True)
-        self.setPalette(palette)             
-
-        # Tabs
-        self.live_tab = QWidget()
-        self.live_tab.setAttribute(Qt.WA_StyledBackground, True)
-        self.live_tab.setStyleSheet("background-color: transparent;")
-        self.log_tab = QWidget()
-        self.settings_tab = QWidget()
-
+        self.live_tab = QWidget(); self.log_tab = QWidget(); self.settings_tab = QWidget(); self.recommendations_tab = QWidget()
         self.tab_widget.addTab(self.live_tab, "Live Posture")
         self.tab_widget.addTab(self.log_tab, "Posture Log")
         self.tab_widget.addTab(self.settings_tab, "Settings")
-        self.tab_widget.addTab(self.live_tab, "Live Posture")
-        self.tab_widget.addTab(self.log_tab, "Posture Log")
-        self.tab_widget.addTab(self.settings_tab, "Settings")
-        self.tab_widget.setStyleSheet("""
-            QTabBar {
-                background: transparent;
-                padding: 10px;
-            }
-
-            QTabBar::tab {
-                app.setFont(QFont(loaded_font_family, 10))
-                background-color: #ffffff;
-                border: 3px solid #000000;
-                border-bottom: 4px solid #000000;
-                border-right: 4px solid #000000;
-                padding: 6px 20px;
-                margin: 6px;
-                color: black;
-                font-size: 12px;
-                font-family: "Press Start 2P", monospace; 
-                font-weight: normal;
-                min-width: 180px;
-                min-height: 30px;
-                text-align: center;
-            }
-
-            QTabBar::tab:selected {
-                background-color: #00ff00;
-            }
-
-            QTabBar::tab:hover {
-                background-color: #ccffcc;
-                
-            }
-
-            QTabWidget::pane {
-                border: 2px solid #000;
-                background-color: transparent;
-                top: -1px;
-                }
-            """)
-
-        self.recommendations_tab = QWidget()
         self.tab_widget.addTab(self.recommendations_tab, "Recommendations")
 
-
-        # Initialize threads
         self.show_landmarks = False
         self.video_thread = VideoThread()
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
-
 
         self.speech_thread = SpeechRecognitionThread()
         self.speech_thread.command_detected.connect(self.handle_voice_command)
@@ -458,28 +218,14 @@ class App(QMainWindow):
         self.notification_volume = 50
         self.beep_interval = 2.0
         self.alert_duration = 10.0
-        
 
-        # Then initialize tabs
         self.init_live_tab()
         self.init_log_tab()
         self.init_settings_tab()
-        
         self.init_recommendations_tab()
-
-
-
-       
-        # Start speech recognition thread
         self.speech_thread.start()
 
-    def resizeEvent(self, event):
-        palette = self.palette()
-        scaled = self.bg_pixmap.scaled(self.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-        palette.setBrush(QPalette.Window, QBrush(scaled))
-        self.setPalette(palette)
-        super().resizeEvent(event)
-        
+    # recommendations tab
     def _on_refresh_products_from_csv(self):
         base = os.path.dirname(__file__)
         files = [
@@ -487,11 +233,9 @@ class App(QMainWindow):
             ("Posture Corrector", os.path.join(base, "posture_corrector_results.csv")),
             ("Resistance Bands", os.path.join(base, "resistance_bands_results.csv")),
         ]
-
         products = []
         for category, path in files:
-            if not os.path.exists(path):
-                continue
+            if not os.path.exists(path): continue
             try:
                 df = pd.read_csv(path)
                 for _, row in df.head(2).iterrows():
@@ -506,87 +250,41 @@ class App(QMainWindow):
                         "url": str(row.get("Link", "")),
                     })
             except Exception as e:
-                print("[RECS] CSV read failed for", path, ":", e)
-
+                print("[RECS] CSV read failed:", path, e)
         if not products:
             products = [
-                {"title":"Memory Foam Neck Pillow", "category":"Neck Pillow", "why":"Supports cervical alignment during long sessions.",
-                "confidence":None, "price_text":"$24.99", "rating":"4.5", "reviews":"12,345", "url":""},
-                {"title":"Adjustable Posture Corrector", "category":"Posture Corrector", "why":"Gently retracts shoulders to counter slouching.",
-                "confidence":None, "price_text":"$29.99", "rating":"4.3", "reviews":"8,901", "url":""},
-                {"title":"Resistance Bands Set", "category":"Resistance Bands", "why":"Helps strengthen scapular stabilizers.",
-                "confidence":None, "price_text":"$19.99", "rating":"4.6", "reviews":"22,101", "url":""},
+                {"title": "Memory Foam Neck Pillow", "category": "Neck Pillow", "why": "Supports cervical alignment during long sessions.", "confidence": None, "price_text": "$24.99", "rating": "4.5", "reviews": "12,345", "url": ""},
+                {"title": "Adjustable Posture Corrector", "category": "Posture Corrector", "why": "Gently retracts shoulders to counter slouching.", "confidence": None, "price_text": "$29.99", "rating": "4.3", "reviews": "8,901", "url": ""},
+                {"title": "Resistance Bands Set", "category": "Resistance Bands", "why": "Helps strengthen scapular stabilizers.", "confidence": None, "price_text": "$19.99", "rating": "4.6", "reviews": "22,101", "url": ""},
             ]
-
         self._display_product_cards(products)
         self._populate_recs_table(products)
 
     def _display_product_cards(self, products):
-        while self.product_grid.count():
+        while hasattr(self, "product_grid") and self.product_grid.count():
             w = self.product_grid.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-
+            if w: w.deleteLater()
         cols = 3
         for i, p in enumerate(products):
             r, c = divmod(i, cols)
             card = ProductCard(
-                title=p.get("title"),
-                category=p.get("category"),
-                why=p.get("why"),
-                price_text=p.get("price_text"),
-                rating=p.get("rating"),
-                reviews=p.get("reviews"),
-                url=p.get("url"),
+                title=p.get("title"), category=p.get("category"), why=p.get("why"),
+                price_text=p.get("price_text"), rating=p.get("rating"), reviews=p.get("reviews"), url=p.get("url")
             )
             self.product_grid.addWidget(card, r, c)
-
         self.product_grid.setRowStretch((len(products) + cols - 1) // cols + 1, 1)
-        
+
     def init_recommendations_tab(self):
         self.recommendations_tab.setObjectName("RecsTab")
-        self.recommendations_tab.setStyleSheet("""
-            QWidget#RecsRoot {
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                            stop:0 #F6FAFF, stop:1 #EAF2FF);
-            }
-            QLabel.SectionTitle {
-                color:#0B5CAD; font-size:18px; font-weight:600;
-            }
-            QLabel.SubTitle {
-                color:#2F6EA9; font-size:14px; font-weight:600;
-            }
-            QPushButton.Primary {
-                background:#0B5CAD; color:white; border:none; border-radius:8px; padding:8px 14px;
-            }
-            QPushButton.Primary:hover { background:#0D6EDB; }
-            QLineEdit {
-                background:#FFFFFF; border:1px solid #C9D7EE; border-radius:6px; padding:6px;
-            }
-            QTableWidget {
-                background:#FFFFFF; color:#0F2238;
-                gridline-color:#DDE6F6; border:1px solid #D5E3F4; border-radius:8px;
-            }
-            QHeaderView::section {
-                background-color:#F2F7FF; color:#0F2238;
-                font-weight:600; border:1px solid #D5E3F4;
-            }
-        """)
-
-        root = QWidget(); root.setObjectName("RecsRoot")
+        root = QWidget(); root.setObjectName("RecsRoot"); root.setStyleSheet(RECS_QSS)
         outer = QVBoxLayout(root); outer.setContentsMargins(16,16,16,16); outer.setSpacing(14)
 
-        cards_title = QLabel("Recommended Products"); cards_title.setProperty("class", "SectionTitle")
-        cards_title.setAlignment(Qt.AlignLeft)
-        cards_title.setObjectName("SectionTitle")
+        cards_title = QLabel("Recommended Products"); cards_title.setProperty("class", "SectionTitle"); cards_title.setObjectName("SectionTitle"); cards_title.setAlignment(Qt.AlignLeft)
         outer.addWidget(cards_title)
 
         tools = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh from CSV"); refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary")
-        refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
-        tools.addWidget(refresh_btn, 0)
-        tools.addStretch(1)
-        outer.addLayout(tools)
+        refresh_btn = QPushButton("Refresh from CSV"); refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary"); refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
+        tools.addWidget(refresh_btn, 0); tools.addStretch(1); outer.addLayout(tools)
 
         self.products_container = QWidget()
         self.product_grid = QGridLayout(self.products_container)
@@ -599,1019 +297,328 @@ class App(QMainWindow):
         outer.addWidget(controls_title)
 
         filters_row = QHBoxLayout()
-        issue_lbl = QLabel("Focus issues:")
-        self.issue_filter_input = QLineEdit()
-        self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
-        filters_row.addWidget(issue_lbl)
-        filters_row.addWidget(self.issue_filter_input, 1)
-
-        budget_lbl = QLabel("Budget:")
-        self.budget_input = QLineEdit()
-        self.budget_input.setPlaceholderText("Max $ (optional)")
-        self.budget_input.setFixedWidth(160)
-        filters_row.addWidget(budget_lbl)
-        filters_row.addWidget(self.budget_input)
+        issue_lbl = QLabel("Focus issues:"); self.issue_filter_input = QLineEdit(); self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
+        filters_row.addWidget(issue_lbl); filters_row.addWidget(self.issue_filter_input, 1)
+        budget_lbl = QLabel("Budget:"); self.budget_input = QLineEdit(); self.budget_input.setPlaceholderText("Max $ (optional)"); self.budget_input.setFixedWidth(160)
+        filters_row.addWidget(budget_lbl); filters_row.addWidget(self.budget_input)
         outer.addLayout(filters_row)
 
-        self.recs_table = QTableWidget()
-        self.recs_table.setColumnCount(6)
+        self.recs_table = QTableWidget(); self.recs_table.setColumnCount(6)
         self.recs_table.setHorizontalHeaderLabels(["Product", "Category", "Why it helps", "Confidence", "Price", "Link"])
         self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.recs_table.setEditTriggers(QTableWidget.NoEditTriggers)
         outer.addWidget(self.recs_table)
 
         buttons = QHBoxLayout()
-        generate_btn = QPushButton("Generate Recommendations"); generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary")
-        generate_btn.clicked.connect(self._on_generate_recommendations)
-        buttons.addWidget(generate_btn)
-
-        save_btn = QPushButton("Save as CSV")
-        save_btn.clicked.connect(self._on_save_recommendations_csv)
-        buttons.addWidget(save_btn)
-
-        buttons.addStretch(1)
-        outer.addLayout(buttons)
+        generate_btn = QPushButton("Generate Recommendations"); generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary"); generate_btn.clicked.connect(self._on_generate_recommendations)
+        save_btn = QPushButton("Save as CSV"); save_btn.clicked.connect(self._on_save_recommendations_csv)
+        buttons.addWidget(generate_btn); buttons.addWidget(save_btn); buttons.addStretch(1); outer.addLayout(buttons)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(root)
-        main_layout = QVBoxLayout()
-        main_layout.addWidget(scroll)
-        self.recommendations_tab.setLayout(main_layout)
-
+        main_layout = QVBoxLayout(); main_layout.addWidget(scroll); self.recommendations_tab.setLayout(main_layout)
         self._on_refresh_products_from_csv()
 
-
+    # live tab
     def init_live_tab(self):
-       # Create a transparent wrapper widget
-        live_wrapper = QWidget()
-        live_wrapper.setAttribute(Qt.WA_StyledBackground, True)
-        live_wrapper.setStyleSheet("background-color: transparent;")
-        layout = QVBoxLayout(live_wrapper)
-        pixel_font = QFont("Press Start 2P", 10)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
+        live_wrapper = QWidget(); live_wrapper.setAttribute(Qt.WA_StyledBackground, True); live_wrapper.setStyleSheet("background-color: transparent;")
+        layout = QVBoxLayout(live_wrapper); layout.setSpacing(12)
 
-        # Create folder QLabel
-        self.folder_icon = QLabel()
-        self.folder_icon.setPixmap(QPixmap("assets/icons/folder_closed.png"))
-        self.folder_icon.setFixedSize(48, 48)
-        self.folder_icon.setScaledContents(True)
-        self.folder_icon.setCursor(Qt.PointingHandCursor)
+        self.folder_icon = QLabel(); self.folder_icon.setPixmap(QPixmap("assets/icons/folder_closed.png")); self.folder_icon.setFixedSize(40,40)
+        self.folder_icon.setScaledContents(True); self.folder_icon.setCursor(Qt.PointingHandCursor)
+        self.folder_icon.setAttribute(Qt.WA_Hover, True); self.folder_icon.installEventFilter(self)
+        top_row = QHBoxLayout(); top_row.addWidget(self.folder_icon, 0, Qt.AlignLeft); top_row.addStretch(1); layout.addLayout(top_row)
 
-        # Enable hover tracking
-        self.folder_icon.setAttribute(Qt.WA_Hover, True)
-        self.folder_icon.installEventFilter(self)
-
-        # Add it to your layout (e.g., top-left corner or any layout you want)
-        layout.addWidget(self.folder_icon)
-
-
-        # Title
-        pixel_font_title = QFont("Press Start 2P", 12)
-        pixel_font_title.setStyleStrategy(QFont.NoAntialias)
-
-        title = QLabel("Live Posture Monitoring")
-        title.setFont(pixel_font_title)  # Now uses the pixel font
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("""
-            color: black;
-            font-weight: normal;
-            padding: 10px;
-        """)
-
+        title = QLabel("Live Posture Monitoring"); title.setFont(QFont(self.app_font.family(), 18, QFont.DemiBold)); title.setAlignment(Qt.AlignCenter); title.setStyleSheet("color: #0B5CAD;")
         layout.addWidget(title)
 
-
-        # Camera feed
-        pixel_font = QFont("Press Start 2P", 8)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-
-        self.image_label = QLabel("Click 'Start Camera' to begin webcam feed")
-        self.image_label.setFont(pixel_font)
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(640, 480)
-        self.image_label.setStyleSheet("background-color: transparent; border: none;")
-        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.image_label = QLabel("Click 'Start Camera' to begin webcam feed"); self.image_label.setAlignment(Qt.AlignCenter); self.image_label.setMinimumSize(800, 480)
+        self.image_label.setStyleSheet(LIVE_IMAGE_QSS); self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.image_label)
 
-        # Status displays
         status_layout = QVBoxLayout()
-
-        # Main posture status - big and prominent
-        pixel_font = QFont("Press Start 2P", 10)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-
-        self.posture_status = QLabel("Posture Status: Not monitoring")
-        self.posture_status.setFont(pixel_font)
-        self.posture_status.setAlignment(Qt.AlignCenter)
-        self.posture_status.setStyleSheet("""
-            font-size: 10px;  
-            padding: 10px; 
-            background-color: #fffff; 
-            border: 3px solid #000000;
-            border-bottom: 4px solid #000000;
-            border-right: 4px solid #000000;
-            color: black;             
-        """)
+        self.posture_status = QLabel("Posture Status: Not monitoring"); self.posture_status.setAlignment(Qt.AlignCenter)
+        self.posture_status.setStyleSheet(posture_style("stopped")); self.posture_status.setFont(QFont(self.app_font.family(), 12))
         status_layout.addWidget(self.posture_status)
 
-        pixel_font = QFont("Press Start 2P", 8)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-        
-        # Detailed stats display - smaller, secondary info
-        self.stats_display = QLabel("Detailed Status: Click 'Start Camera' to begin monitoring")
-        self.stats_display.setFont(pixel_font)
-        self.stats_display.setAlignment(Qt.AlignCenter)
-        self.stats_display.setStyleSheet("font-size: 10px; padding: 8px; background-color: #e8f4fd; border-radius: 6px; color: black;border-bottom: 4px solid #000000;  border-right: 4px solid #000000; border: 3px solid #000000;")
+        self.stats_display = QLabel("Detailed Status: Click 'Start Camera' to begin monitoring"); self.stats_display.setAlignment(Qt.AlignCenter); self.stats_display.setWordWrap(True)
+        self.stats_display.setStyleSheet(STATUS_PANEL_QSS); self.stats_display.setFont(QFont(self.app_font.family(), 10))
         status_layout.addWidget(self.stats_display)
-
         layout.addLayout(status_layout)
 
-        # Control buttons
-        btn_layout = QHBoxLayout()
+        btn_layout = QHBoxLayout(); btn_layout.setSpacing(10); icon_size = QSize(18, 18)
+        self.start_button = QPushButton("Start Camera"); self.start_button.setIcon(QIcon("assets/start_icon.png")); self.start_button.setIconSize(icon_size); self.start_button.clicked.connect(self.start_video); btn_layout.addWidget(self.start_button)
+        self.stop_button = QPushButton("Stop Camera"); self.stop_button.setIcon(QIcon("assets/stop_icon.png")); self.stop_button.setIconSize(icon_size); self.stop_button.clicked.connect(self.stop_video); self.stop_button.setEnabled(False); btn_layout.addWidget(self.stop_button)
+        self.calibrate_button = QPushButton("Calibrate"); self.calibrate_button.setIcon(QIcon("assets/calibrate_icon.png")); self.calibrate_button.setIconSize(icon_size); self.calibrate_button.setStyleSheet(BTN_SUCCESS_QSS); self.calibrate_button.clicked.connect(self.start_calibration); btn_layout.addWidget(self.calibrate_button)
+        btn_layout.addStretch(1); layout.addLayout(btn_layout)
 
-        button_style = """
-            QPushButton {
-                    font-size: 10px;
-                    padding: 6x 20px;
-                    background-color: #f0f0f0;
-                    border: 3px solid #000000;
-                    border-bottom: 4px solid #000000;
-                    border-right: 4px solid #000000;
-                    border-radius: 10px;
-                    color: #000;
-                    min-width: 160px;
-                    min-height: 32px;
-                    font-family: "Press Start 2P", monospace;
-                    font-size: 10px;
-
-                }
-            QPushButton:hover {
-                background-color: #ccffcc;
-        }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #888888;
-            }
-        """
-        icon_size = QSize(20, 20)
-
-        # Start Camera Button
-        self.start_button = QPushButton("  Start Camera")
-        self.start_button.setIcon(QIcon("assets/start_icon.png"))
-        self.start_button.setIconSize(icon_size)
-        self.start_button.setFont(pixel_font)
-        self.start_button.setStyleSheet(button_style)
-        self.start_button.clicked.connect(self.start_video)
-        btn_layout.addWidget(self.start_button)
-
-        # Stop Camera Button 
-        self.stop_button = QPushButton("  Stop Camera")
-        self.stop_button.setIcon(QIcon("assets/stop_icon.png"))
-        self.stop_button.setIconSize(icon_size)
-        self.stop_button.setFont(pixel_font)
-        self.stop_button.setStyleSheet(button_style)
-        self.stop_button.clicked.connect(self.stop_video)
-        self.stop_button.setEnabled(False)
-        btn_layout.addWidget(self.stop_button)
-
-        # Calibration Button
-        self.calibrate_button = QPushButton("  Calibrate")
-        self.calibrate_button.setIcon(QIcon("assets/calibrate_icon.png"))
-        self.calibrate_button.setIconSize(icon_size)
-        self.calibrate_button.setFont(pixel_font)
-        self.calibrate_button.setStyleSheet(button_style + "background-color: #4CAF50; color: white;")
-        self.calibrate_button.clicked.connect(self.start_calibration)
-        btn_layout.addWidget(self.calibrate_button)
-
-
-        
-        
-        layout.addLayout(btn_layout)
-
-        # Voice command status
-
-        pixel_font = QFont("Press Start 2P", 8)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-
-
-        self.voice_status = QLabel("🎤 Voice Status: Initializing...")
-        self.voice_status.setFont(pixel_font)
-        self.voice_status.setAlignment(Qt.AlignCenter)
-        self.voice_status.setStyleSheet("font-size: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px; color: black;")
+        self.voice_status = QLabel("🎤 Voice Status: Initializing..."); self.voice_status.setAlignment(Qt.AlignCenter); self.voice_status.setStyleSheet(voice_status_style("neutral"))
         layout.addWidget(self.voice_status)
 
-        self.live_tab.setLayout(QVBoxLayout())
-        self.live_tab.layout().addWidget(live_wrapper)
+        self.live_tab.setLayout(QVBoxLayout()); self.live_tab.layout().addWidget(live_wrapper)
 
-
+    # log tab
     def init_log_tab(self):
-        layout = QVBoxLayout()
-
-        title = QLabel("Posture Data Log")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        layout.addWidget(title)
-        
-        #EMDYA CHANGE - Created a table widget for a more aesthetically pleasing log display
-        self.log_table = QTableWidget()
-        self.log_table.setColumnCount(6)
+        layout = QVBoxLayout(); layout.setSpacing(12)
+        title = QLabel("Posture Data Log"); title.setFont(QFont(self.app_font.family(), 16, QFont.DemiBold)); title.setStyleSheet("color: #0B5CAD;"); layout.addWidget(title)
+        self.log_table = QTableWidget(); self.log_table.setColumnCount(6)
         self.log_table.setHorizontalHeaderLabels(["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"])
-        self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.log_table.setEditTriggers(QTableWidget.NoEditTriggers)  # Make it read-only
+        self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); self.log_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.log_table)
-
-        #Buttons for log management
         btn_layout = QHBoxLayout()
-    
-        load_button = QPushButton("📊 Load Posture Log")
-        load_button.clicked.connect(self.load_log)
-        btn_layout.addWidget(load_button)
-
-        refresh_button = QPushButton("🔄 Refresh")
-        refresh_button.clicked.connect(self.load_log)
-        btn_layout.addWidget(refresh_button)
-
-        layout.addLayout(btn_layout)
+        load_button = QPushButton("📊 Load Posture Log"); load_button.clicked.connect(self.load_log); btn_layout.addWidget(load_button)
+        refresh_button = QPushButton("🔄 Refresh"); refresh_button.clicked.connect(self.load_log); btn_layout.addWidget(refresh_button)
+        btn_layout.addStretch(1); layout.addLayout(btn_layout)
         self.log_tab.setLayout(layout)
 
-        
-
-        
-
-         # Set layout to tab
-        self.log_tab.setLayout(layout)
-        
-
+    # settings tab
     def init_settings_tab(self):
-        pixel_font = QFont("Press Start 2P", 10)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-        
+        layout = QVBoxLayout(); layout.setSpacing(12)
 
+        visual_group = QGroupBox("Visual Settings"); v_layout = QFormLayout()
+        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed"); self.landmark_checkbox.setChecked(self.show_landmarks); self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
+        v_layout.addRow(QLabel("Landmarks:"), self.landmark_checkbox)
+        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed"); landmark_info.setStyleSheet("color: #5A6B84;")
+        v_layout.addRow("", landmark_info)
+        visual_group.setLayout(v_layout); layout.addWidget(visual_group)
 
-        layout = QVBoxLayout()
-
-          #visual settings group
-        visual_group = QGroupBox("Visual Settings")
-        visual_group.setFont(pixel_font)  # Apply your pixel-style font
-        visual_group.setStyleSheet("""
-            QGroupBox {
-                font-family: "Press Start 2P";
-                font-size: 10px;
-                color: black;
-                border: 2px solid black;
-                border-radius: 5px;
-                margin-top: 10px;
-                background-color: rgba(200, 200, 200, 160);  /* Transparent light gray */
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-        visual_layout = QFormLayout()
-        # Pixel font
-        pixel_font = QFont("Press Start 2P", 10)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-        #landmark toggle
-        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed")
-        self.landmark_checkbox.setFont(pixel_font)
-        self.landmark_checkbox.setChecked(self.show_landmarks)
-        self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
-
-        landmark_label = QLabel("Landmarks:")
-        landmark_label.setFont(pixel_font)
-        visual_layout.addRow(landmark_label, self.landmark_checkbox)
-
-
-         # info about the landmark toggle
-        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed")
-        landmark_info.setFont(pixel_font)
-        landmark_info.setStyleSheet("""
-            font-size: 10px;
-            color: #333;
-            font-style: italic;
-            font-family: "Press Start 2P";
-        """)
-        visual_layout.addRow("", landmark_info)
-
-        visual_group.setLayout(visual_layout)
-        layout.addWidget(visual_group)
-
-        #notif_group = QGroupBox("Notification Settings")
-        notif_group = QGroupBox()
-        notif_group.setTitle("Notification Settings")
-        notif_group.setFont(pixel_font)
-        notif_group.setStyleSheet("""
-            QGroupBox {
-                font-family: "Press Start 2P";
-                font-size: 10px;
-                color: black;
-                border: 2px solid black;
-                border-radius: 5px;
-                margin-top: 10px;
-                background-color: rgba(200, 200, 200, 160);  /* Light gray with transparency */
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-        self.settings_tab.setStyleSheet("background-color: transparent;")
-
-
-        notif_layout = QFormLayout()
-
-        # Volume Control
-        self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(self.notification_volume)
-        self.volume_slider.setTickPosition(QSlider.TicksBelow)
-        self.volume_slider.setTickInterval(10)
+        notif_group = QGroupBox("Notification Settings"); n_layout = QFormLayout()
+        vol_row = QHBoxLayout()
+        self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0,100); self.volume_slider.setValue(self.notification_volume)
+        self.volume_slider.setTickPosition(QSlider.TicksBelow); self.volume_slider.setTickInterval(10)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
+        self.volume_label = QLabel(f"{self.notification_volume}%"); self.volume_label.setFixedWidth(60)
+        vol_row.addWidget(self.volume_slider,1); vol_row.addWidget(self.volume_label,0,Qt.AlignRight)
+        n_layout.addRow(QLabel("Notification Volume:"), vol_row)
 
-        self.volume_label = QLabel(f"{self.notification_volume}%")
-        volume_layout = QHBoxLayout()
-        volume_layout.addWidget(self.volume_slider)
-        volume_layout.addWidget(self.volume_label)
-        notif_label1 = QLabel("Notification Volume:")
-        notif_label1.setFont(pixel_font)
-        notif_layout.addRow(notif_label1, volume_layout)
-        self.volume_label.setFont(pixel_font)
-        self.volume_label.setStyleSheet(""" 
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            background-color: white;
-            border: 2px solid black;
-            padding: 4px;
-        """)
+        self.beep_interval_spinbox = QDoubleSpinBox(); self.beep_interval_spinbox.setRange(0.5,10.0); self.beep_interval_spinbox.setSingleStep(0.5)
+        self.beep_interval_spinbox.setValue(self.beep_interval); self.beep_interval_spinbox.setSuffix(" seconds"); self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
+        n_layout.addRow(QLabel("Beep Interval:"), self.beep_interval_spinbox)
 
-        # Beep Interval Control
-        self.beep_interval_spinbox = QDoubleSpinBox()
-        self.beep_interval_spinbox.setRange(0.5, 10.0)
-        self.beep_interval_spinbox.setSingleStep(0.5)
-        self.beep_interval_spinbox.setValue(self.beep_interval)
-        self.beep_interval_spinbox.setSuffix(" seconds")
-        self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
-        notif_label2 = QLabel("Beep Interval:")
-        notif_label2.setFont(pixel_font)
-        notif_layout.addRow(notif_label2, self.beep_interval_spinbox)
-        # Apply pixel font and black styling to beep interval spinbox
-        self.beep_interval_spinbox.setFont(pixel_font)
-        self.beep_interval_spinbox.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            ackground-color: white;
-            border: 2px solid black;
-            padding: 4px;
-        """)
+        self.alert_duration_spinbox = QSpinBox(); self.alert_duration_spinbox.setRange(1,60); self.alert_duration_spinbox.setValue(int(self.alert_duration))
+        self.alert_duration_spinbox.setSuffix(" seconds"); self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
+        n_layout.addRow(QLabel("Alert Duration:"), self.alert_duration_spinbox)
 
-        # Alert Duration Control
-        self.alert_duration_spinbox = QSpinBox()
-        self.alert_duration_spinbox.setRange(1, 60)
-        self.alert_duration_spinbox.setValue(int(self.alert_duration))
-        self.alert_duration_spinbox.setSuffix(" seconds")
-        self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
-        notif_label3 = QLabel("Alert Duration:")
-        notif_label3.setFont(pixel_font)
-        notif_layout.addRow(notif_label3, self.alert_duration_spinbox)
-        notif_group.setLayout(notif_layout)
-        layout.addWidget(notif_group)
-        # Apply pixel font and black styling to alert duration spinbox
-        self.alert_duration_spinbox.setFont(pixel_font)
-        self.alert_duration_spinbox.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            background-color: white;
-            border: 2px solid black;
-            padding: 4px;
-        """)
+        notif_group.setLayout(n_layout); layout.addWidget(notif_group)
 
+        voice_title = QLabel("🎤 Voice Control Settings"); voice_title.setFont(QFont(self.app_font.family(), 12, QFont.Medium)); voice_title.setStyleSheet("color: #0B5CAD;"); layout.addWidget(voice_title)
+        voice_group = QGroupBox(); vg_layout = QVBoxLayout()
+        self.voice_checkbox = QCheckBox("Enable Voice Commands"); self.voice_checkbox.setChecked(False); self.voice_checkbox.stateChanged.connect(self.toggle_voice_recognition); vg_layout.addWidget(self.voice_checkbox)
+        voice_help_group = QGroupBox("Voice Commands Available"); vh_layout = QVBoxLayout()
+        voice_help_label = QLabel(
+            "Camera Control:\n"
+            "• \"stop\" only turns off camera – \"start\" turns it back on\n"
+            "• App keeps running when camera is stopped\n"
+            "• Only \"exit\" will close the entire application\n\n"
+            "Speech Tips:\n"
+            "• Use \"stop\" to pause camera, \"exit\" to close app\n"
+            "• \"cal\" works better than \"calibrate\"\n"
+            "• Wait for \"Listening...\" before speaking\n"
+            "• Speak clearly at normal volume\n\n"
+            "Examples:\n"
+            "• \"stop\" → Camera off\n"
+            "• \"start\" → Camera on\n"
+            "• \"exit\" → Close app"
+        )
+        voice_help_label.setWordWrap(True); vh_layout.addWidget(voice_help_label); voice_help_group.setLayout(vh_layout)
+        vg_layout.addWidget(voice_help_group); voice_group.setLayout(vg_layout); layout.addWidget(voice_group)
 
-        # Add some spacing
-        layout.addStretch()
-
-        # Voice Control Section
-        #  Section Label (outside the box)
-        voice_section_label = QLabel("🎤 Voice Control Settings")
-        voice_section_label.setFont(pixel_font)
-        voice_section_label.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            margin-top: 10px;
-            margin-bottom: 2px;
-            padding-left: 10px;
-        """)
-        layout.addWidget(voice_section_label)
-
-        # 📦 Container Box for Voice Controls (no title)
-        voice_group = QGroupBox()
-        voice_group.setStyleSheet("""
-            QGroupBox {
-                border: 2px solid black;
-                border-radius: 5px;
-                background-color: rgba(200, 200, 200, 160);
-                margin-top: 0px;
-            }
-        """)
-        voice_layout = QVBoxLayout()
-
-        #  Checkbox (with pixel font)
-        self.voice_checkbox = QCheckBox("Enable Voice Commands")
-        self.voice_checkbox.setFont(pixel_font)
-        self.voice_checkbox.setChecked(False)
-        self.voice_checkbox.stateChanged.connect(self.toggle_voice_recognition)
-        self.voice_checkbox.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            padding: 5px;
-        """)
-        voice_layout.addWidget(self.voice_checkbox)
-
-        #  Voice Commands Info Block
-        voice_help_group = QGroupBox("Voice Commands Available")
-        voice_help_group.setFont(pixel_font)
-        voice_help_group.setStyleSheet("""
-            QGroupBox {
-                font-family: "Press Start 2P";
-                font-size: 10px;
-                color: black;
-                border: 2px solid black;
-                border-radius: 6px;
-                background-color: rgba(200, 200, 200, 160);
-            }
-            QGroupBox::title {
-                subcontrol-origin: content;
-                subcontrol-position: top left;
-                left: 6px;
-                top: -2px;
-                padding: 0px 4px;
-            }
-        """)
-
-        voice_help_label = QLabel("""
-        Camera Control:
-        • "stop" only turns off camera – you can say "start" to turn it back on
-        • App keeps running in background when camera is stopped
-        • Only "exit" will close the entire application
-
-        Speech Tips:
-        • Use "stop" to pause camera, "exit" to close app
-        • "cal" works better than "calibrate" for speech recognition
-        • Wait for "Listening..." before speaking
-        • Speak clearly at normal volume
-
-        Recognition Examples:
-        • "stop" → Camera off, app running
-        • "start" → Camera on
-        • "exit" → Close everything
-
-        Note: Enable voice commands with the checkbox above first.
-        """)
-        voice_help_label.setFont(pixel_font)
-        voice_help_label.setWordWrap(True)
-        voice_help_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        voice_help_label.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            background-color: transparent;
-            padding: 10px;
-        """)
-
-        voice_help_layout = QVBoxLayout()
-        voice_help_layout.addWidget(voice_help_label)
-        voice_help_group.setLayout(voice_help_layout)
-
-        voice_layout.addWidget(voice_help_group)
-        voice_group.setLayout(voice_layout)
-
-        # Add the voice section to main layout
-        layout.addWidget(voice_group)
-
-            
-
-        layout.addWidget(QLabel(""))  # Spacer
-
-        # Data Management Section (Pixel Aesthetic)
-        data_section = QLabel("📁 Data Management")
-        data_section.setFont(pixel_font)
-        data_section.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 12px;
-            color: black;
-            padding: 8px;
-            background-color: rgba(255, 255, 255, 200);
-            border: 2px solid black;
-            border-radius: 10px;
-            margin-top: 20px;
-        """)
+        data_section = QLabel("📁 Data Management"); data_section.setFont(QFont(self.app_font.family(), 12, QFont.Medium))
+        data_section.setStyleSheet("QLabel { color: #0F2238; background: #FFFFFF; border: 1px solid #D5E3F4; border-radius: 8px; padding: 8px; }")
         layout.addWidget(data_section)
-        data_btn_layout = QHBoxLayout()
-        
 
-        export_button = QPushButton("💾 Export Log as CSV")
-        export_button.clicked.connect(self.export_log)
-        data_btn_layout.addWidget(export_button)
-        export_button.setFont(pixel_font)
-        export_button.setStyleSheet("""
-            QPushButton {
-                font-family: "Press Start 2P";
-                font-size: 10px;
-                color: black;
-                background-color: white;
-                border: 2px solid black;
-                padding: 10px;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
-                background-color: #ccffcc;
-            }
-         """)
+        data_btns = QHBoxLayout()
+        export_button = QPushButton("💾 Export Log as CSV"); export_button.clicked.connect(self.export_log); data_btns.addWidget(export_button)
+        clear_log_button = QPushButton("🗑️ Clear Log Data"); clear_log_button.clicked.connect(self.clear_log); data_btns.addWidget(clear_log_button)
+        data_btns.addStretch(1); layout.addLayout(data_btns)
 
-        clear_log_button = QPushButton("🗑️ Clear Log Data")
-        clear_log_button.clicked.connect(self.clear_log)
-        clear_log_button.setFont(pixel_font)
-        clear_log_button.setStyleSheet("""
-            QPushButton {
-                font-family: "Press Start 2P";
-                font-size: 10px;
-                color: black;
-                background-color: white;
-                border: 2px solid black;
-                padding: 10px;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
-                background-color: #ffcccc;
-            }
-         """)
-        clear_log_button.clicked.connect(self.clear_log)
-        data_btn_layout.addWidget(clear_log_button)
-
-
-        layout.addLayout(data_btn_layout)
-
-        # Instructions
-        info_label = QLabel("""
-📋 Instructions:
-1. Enable voice commands using the checkbox above
-2. Start the camera feed in the 'Live Posture' tab  
-3. Say "calibrate" or click the button to set your baseline posture
-4. Maintain good posture during the 8-second calibration
-5. The system will monitor your posture and provide audio alerts
-6. View logged data in the 'Posture Log' tab
-
-💡 Tips for Best Results:
-• Ensure good lighting and a quiet environment
-• Keep microphone permissions enabled for your browser/system
-• Speak clearly when using voice commands
-• Use a stable camera position (tripod recommended)
-        """)
-        info_label.setFont(pixel_font)
+        info_label = QLabel(
+            "Instructions:\n"
+            "1. Enable voice commands\n"
+            "2. Start the camera feed\n"
+            "3. Say \"calibrate\" or click to set baseline\n"
+            "4. Maintain posture for 8 seconds\n"
+            "5. Monitor and receive alerts\n"
+            "6. View data in 'Posture Log'\n\n"
+            "Tips:\n"
+            "• Good lighting and quiet room\n"
+            "• Mic permissions enabled\n"
+            "• Speak clearly\n"
+            "• Stable camera position"
+        )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 10px;
-            color: black;
-            background-color: white;
-            border: 2px solid black;
-            border-radius: 10px;
-            padding: 16px;
-            margin-top: 12px;
-        """)
-        # Scrollable wrapper
-        info_scroll = QScrollArea()
-        info_scroll.setWidgetResizable(True)
-        info_scroll.setFixedHeight(200)
-        info_scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-            }
-            QScrollBar:vertical {
-                width: 12px;
-                background: rgba(220, 220, 220, 100);
-            }
-            QScrollBar::handle:vertical {
-                background: #444;
-                border-radius: 6px;
-            }
-         """)
-        info_scroll.setWidget(info_label)
+        info_label.setStyleSheet("QLabel { color: #2E3C51; background: #FFFFFF; border: 1px solid #D5E3F4; border-radius: 10px; padding: 12px; }")
+        info_scroll = QScrollArea(); info_scroll.setWidgetResizable(True); info_scroll.setFixedHeight(200); info_scroll.setWidget(info_label)
         layout.addWidget(info_scroll)
-        #layout.addWidget(info_label)
+        layout.addStretch(1)
 
-        layout.addStretch()
-        # Wrapping full settings layout inside a container widget
-        settings_inner_widget = QWidget()
-        settings_inner_widget.setLayout(layout)
-        # Scroll Wrapper for tabbed layout
-        settings_scroll = QScrollArea()
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setWidget(settings_inner_widget)
-        settings_scroll.setStyleSheet("""
-            QScrollArea {
-                    border: none;
-                    background-color: transparent;
-            }
-            QScrollBar:vertical {
-                    width: 12px;
-                    background: rgba(220, 220, 220, 100);
-            }
-            QScrollBar::handle:vertical {
-                background: #444;
-                border-radius: 6px;
-            }
-         """)
-        #  Set main layout of the tab
-        outer_layout = QVBoxLayout()
-        outer_layout.addWidget(settings_scroll)
-        self.settings_tab.setLayout(outer_layout)
-        
+        settings_inner = QWidget(); settings_inner.setLayout(layout)
+        settings_scroll = QScrollArea(); settings_scroll.setWidgetResizable(True); settings_scroll.setWidget(settings_inner)
+        outer = QVBoxLayout(); outer.addWidget(settings_scroll); self.settings_tab.setLayout(outer)
+
+    # recs logic
     def _on_generate_recommendations(self):
-        """
-        Builds a simple request from posture history + UI filters,
-        calls backend stubs, then populates the table.
-        """
         try:
-            import backend
-
-            # --- 1C: References / posture history for mapping ---
-            # You’ll implement these functions in backend.py.
-            # get_posture_history() should return recent labeled issues (strings) or structured events.
-            # get_recommendation_references() can return an internal mapping of issue->keywords/categories.
             posture_history = getattr(backend, "get_posture_history", lambda: [])()
             references = getattr(backend, "get_recommendation_references", lambda: {})()
-
-            # User overrides from UI
             focus_text = (self.issue_filter_input.text() or "").strip()
             extra_focus = [s.strip() for s in focus_text.split(",") if s.strip()]
             budget_raw = (self.budget_input.text() or "").strip()
-            try:
-                budget = float(budget_raw) if budget_raw else None
-            except ValueError:
-                budget = None
-
-            # --- 1A: Confidence weights (placeholder) ---
-            # If you expose per-issue weights in Settings later, read & pass them in here.
-            # For now, let backend derive weights from posture_history.
+            try: budget = float(budget_raw) if budget_raw else None
+            except ValueError: budget = None
             weights = None
-
-            # --- 1B: SerpAPI Amazon query ---
-            # You’ll implement query_products_via_serpapi(issues, refs, extra_focus, budget, weights)
-            # to call SerpAPI (keep key in env / config).
             issues = extra_focus if extra_focus else posture_history
             results = getattr(backend, "query_products_via_serpapi", lambda *args, **kwargs: [])(
-                issues=issues,
-                references=references,
-                extra_focus=extra_focus,
-                budget=budget,
-                weights=weights
+                issues=issues, references=references, extra_focus=extra_focus, budget=budget, weights=weights
             )
-
-            # Fill table
             self._populate_recs_table(results)
-
-            # Update status panel to reflect the action
-            if hasattr(self, "stats_display"):
-                self.stats_display.setText("Recommendations updated from posture history & filters.")
-
+            if hasattr(self, "stats_display"): self.stats_display.setText("Recommendations updated.")
         except Exception as e:
-            if hasattr(self, "stats_display"):
-                self.stats_display.setText(f"Failed to get recommendations: {e}")
-            print("[RECS] Error:", e)
+            if hasattr(self, "stats_display"): self.stats_display.setText(f"Failed to get recommendations: {e}")
 
     def _populate_recs_table(self, products):
-        """
-        products: list of dicts with keys:
-        title, category, why, confidence (0..1), price_text, url
-        """
         self.recs_table.setRowCount(0)
         if not products:
-            self.recs_table.setRowCount(1)
-            self.recs_table.setItem(0, 0, QTableWidgetItem("No recommendations yet."))
-            return
-
+            self.recs_table.setRowCount(1); self.recs_table.setItem(0,0,QTableWidgetItem("No recommendations yet.")); return
         self.recs_table.setRowCount(len(products))
         for r, p in enumerate(products):
-            title = p.get("title", "—")
-            cat = p.get("category", "—")
-            why = p.get("why", "—")
-            conf = p.get("confidence", None)
-            price = p.get("price_text", "—")
-            url = p.get("url", "")
-
-            self.recs_table.setItem(r, 0, QTableWidgetItem(title))
-            self.recs_table.setItem(r, 1, QTableWidgetItem(cat))
-            self.recs_table.setItem(r, 2, QTableWidgetItem(why))
-
+            title = p.get("title", "—"); cat = p.get("category", "—"); why = p.get("why", "—"); conf = p.get("confidence", None)
+            price = p.get("price_text", "—"); url = p.get("url", "")
+            self.recs_table.setItem(r,0,QTableWidgetItem(title))
+            self.recs_table.setItem(r,1,QTableWidgetItem(cat))
+            self.recs_table.setItem(r,2,QTableWidgetItem(why))
             conf_display = "—" if conf is None else f"{round(float(conf)*100):d}%"
-            self.recs_table.setItem(r, 3, QTableWidgetItem(conf_display))
-            self.recs_table.setItem(r, 4, QTableWidgetItem(price))
-
-            link_item = QTableWidgetItem(url if url else "—")
-            if url:
-                # not clickable by default; double-click handler could open QDesktopServices
-                pass
-            self.recs_table.setItem(r, 5, link_item)
+            self.recs_table.setItem(r,3,QTableWidgetItem(conf_display))
+            self.recs_table.setItem(r,4,QTableWidgetItem(price))
+            self.recs_table.setItem(r,5,QTableWidgetItem(url if url else "—"))
 
     def _on_save_recommendations_csv(self):
         try:
-            dest, _ = QFileDialog.getSaveFileName(
-                self, "Save Recommendations", "recommendations.csv", "CSV Files (*.csv)"
-            )
-            if not dest:
-                return
-
+            dest, _ = QFileDialog.getSaveFileName(self, "Save Recommendations", "recommendations.csv", "CSV Files (*.csv)")
+            if not dest: return
             import csv
             cols = [self.recs_table.horizontalHeaderItem(i).text() for i in range(self.recs_table.columnCount())]
-
             with open(dest, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(cols)
+                writer = csv.writer(f); writer.writerow(cols)
                 for r in range(self.recs_table.rowCount()):
                     row = []
                     for c in range(self.recs_table.columnCount()):
-                        item = self.recs_table.item(r, c)
-                        row.append(item.text() if item else "")
+                        item = self.recs_table.item(r, c); row.append(item.text() if item else "")
                     writer.writerow(row)
-
-            if hasattr(self, "stats_display"):
-                self.stats_display.setText("💾 Saved recommendations to CSV.")
+            if hasattr(self, "stats_display"): self.stats_display.setText("Saved recommendations to CSV.")
         except Exception as e:
-            if hasattr(self, "stats_display"):
-                self.stats_display.setText(f"Save failed: {e}")
+            if hasattr(self, "stats_display"): self.stats_display.setText(f"Save failed: {e}")
 
+    # settings handlers
     def toggle_landmark_visibility(self, state):
         self.show_landmarks = (state == Qt.Checked)
-        status = "enabled" if self.show_landmarks else "disabled"
-        print(f"[GUI] Landmark visibility {status}")
-
         if self.video_thread and self.video_thread.isRunning():
             self.video_thread.set_landmark_visibility(self.show_landmarks)
-        # Provide user feedback
-        if self.show_landmarks:
-            self.stats_display.setText("Landmarks enabled - pose detection points will be visible")
-        else:
-            self.stats_display.setText("Landmarks disabled - clean video feed") 
+        if hasattr(self, "stats_display"):
+            self.stats_display.setText("Landmarks enabled" if self.show_landmarks else "Landmarks disabled")
 
     def _on_volume_changed(self, value):
-        self.notification_volume = value
-        self.volume_label.setText(f"{value}%")
-        backend.update_notification_volume(value)
+        self.notification_volume = value; self.volume_label.setText(f"{value}%"); backend.update_notification_volume(value)
 
     def _on_beep_interval_changed(self, value):
-        self.beep_interval = value
-        backend.update_beep_interval(value)
+        self.beep_interval = value; backend.update_beep_interval(value)
 
     def _on_alert_duration_changed(self, value):
-        self.alert_duration = value
-        backend.update_alert_duration(value)
+        self.alert_duration = value; backend.update_alert_duration(value)
 
+    # voice
     def toggle_voice_recognition(self, state):
-        """Enable or disable voice recognition"""
         if state == Qt.Checked:
             self.speech_thread.enable_listening()
-            self.voice_status.setText("🎤 Voice Status: Listening for commands...")
-            self.voice_status.setStyleSheet(
-                "font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
-            print("[GUI] Voice recognition enabled")
+            self.voice_status.setText("🎤 Voice Status: Listening...")
+            self.voice_status.setStyleSheet(voice_status_style("on"))
         else:
             self.speech_thread.disable_listening()
             self.voice_status.setText("🎤 Voice Status: Disabled")
-            self.voice_status.setStyleSheet(
-                "font-size: 12px; padding: 5px; background-color: #f8d7da; border-radius: 3px;")
-            print("[GUI] Voice recognition disabled")
+            self.voice_status.setStyleSheet(voice_status_style("off"))
 
     def handle_voice_command(self, command):
-        """Handle recognized voice commands with improved matching"""
-        print(f"[GUI] Processing voice command: '{command}'")
-
-        # Convert to lowercase and split into words for better matching
         words = command.lower().split()
-        command_lower = command.lower()
-
-        # DEBUG: Show what we're analyzing
-        print(f"[DEBUG] Words: {words}")
-        print(f"[DEBUG] Command lower: '{command_lower}'")
-
-        # Show what was heard in the GUI
+        s = command.lower()
         self.voice_status.setText(f"🎤 Heard: '{command}'")
-
-        # CALIBRATION COMMANDS - More flexible matching for "calibrate"
-        calibration_triggers = [
-            "calibrate", "calibration", "collab", "cal", "caliber",
-            "collaborate", "calib", "kelly", "cali", "cab", "start calibration"
-        ]
-        if any(trigger in command_lower for trigger in calibration_triggers):
-            print("[VOICE] ✅ Calibration command detected")
-            self.start_calibration()
-            self.stats_display.setText("🎤 Voice Command: Starting calibration...")
-
-        # STOP CAMERA COMMANDS - Only stops camera, keeps app running (CHECK THIS FIRST)
-        elif any(phrase in command_lower for phrase in
-                 ["stop camera", "pause camera", "turn off camera", "camera off"]) or (
-                len(words) == 1 and words[0] in ["stop", "pause", "halt", "off"]):
-            print("[VOICE] ✅ Stop camera command detected (app stays open)")
+        calibration_triggers = ["calibrate","calibration","collab","cal","caliber","collaborate","calib","kelly","cali","cab","start calibration"]
+        if any(t in s for t in calibration_triggers):
+            self.start_calibration(); self.stats_display.setText("Voice: Starting calibration...")
+        elif any(p in s for p in ["stop camera","pause camera","turn off camera","camera off"]) or (len(words)==1 and words[0] in ["stop","pause","halt","off"]):
             if self.video_thread.isRunning():
-                self.stop_video()
-                self.stats_display.setText("🎤 Camera stopped - app still running. Say 'start' to resume.")
+                self.stop_video(); self.stats_display.setText("Voice: Camera stopped. Say 'start' to resume.")
             else:
-                self.stats_display.setText("🎤 Camera already stopped. Say 'start' to begin.")
-
-        # EXIT COMMANDS - Only for closing the entire app (MORE SPECIFIC)
-        elif any(phrase in command_lower for phrase in
-                 ["exit", "quit", "close app", "goodbye", "end app", "close application", "shut down"]):
-            print("[VOICE] ✅ Exit application command detected (closing app)")
-            self.stats_display.setText("🎤 Voice Command: Exiting application...")
-            QTimer.singleShot(1000, self.close)  # Close after 1 second
-
-        # START COMMANDS (more flexible matching)
-        elif any(word in ["start", "begin", "go", "play", "run", "on"] for word in words) or any(
-                phrase in command_lower for phrase in ["turn on", "start camera", "begin camera"]):
-            print("[VOICE] ✅ Start camera command detected")
+                self.stats_display.setText("Voice: Camera already stopped.")
+        elif any(p in s for p in ["exit","quit","close app","goodbye","end app","close application","shut down"]):
+            self.stats_display.setText("Voice: Exiting..."); QTimer.singleShot(1000, self.close)
+        elif any(word in ["start","begin","go","play","run","on"] for word in words) or any(p in s for p in ["turn on","start camera","begin camera"]):
             if not self.video_thread.isRunning():
-                self.start_video()
-                self.stats_display.setText("🎤 Camera started successfully!")
+                self.start_video(); self.stats_display.setText("Voice: Camera started.")
             else:
-                self.stats_display.setText("🎤 Camera already running")
-
-        # HELP COMMAND
-        elif any(word in ["help", "commands", "what", "options"] for word in words):
-            print("[VOICE] Help command detected")
-            self.stats_display.setText("🎤 Commands: 'start' (camera), 'stop' (camera), 'cal' (calibrate), 'exit' (app)")
-
+                self.stats_display.setText("Voice: Camera already running.")
+        elif any(word in ["help","commands","what","options"] for word in words):
+            self.stats_display.setText("Voice: Commands: start, stop, cal, exit")
         else:
-            print(f"[VOICE] ❌ Unknown command: '{command}'")
-            print(f"[VOICE] Commands: stop (camera only), exit (close app), start (camera), cal (calibrate)")
-            self.stats_display.setText(f"🎤 Unknown: '{command}' - Try: stop, start, cal, exit")
-
-        # Reset voice status after 4 seconds to show the feedback longer
-        QTimer.singleShot(4000, lambda: self.reset_voice_status())
+            self.stats_display.setText(f"Voice: Unknown '{command}'")
+        QTimer.singleShot(4000, self.reset_voice_status)
 
     def update_speech_status(self, status):
-        """Update speech recognition status"""
-        if self.voice_checkbox.isChecked():
+        if hasattr(self, "voice_checkbox") and self.voice_checkbox.isChecked():
             self.voice_status.setText(f"🎤 Voice Status: {status}")
 
     def reset_voice_status(self):
-        """Reset voice status to default listening state"""
-        if self.voice_checkbox.isChecked():
-            self.voice_status.setText("🎤 Voice Status: Listening for commands...")
-            self.voice_status.setStyleSheet(
-                "font-size: 12px; padding: 5px; background-color: #d4edda; border-radius: 3px;")
+        if hasattr(self, "voice_checkbox") and self.voice_checkbox.isChecked():
+            self.voice_status.setText("🎤 Voice Status: Listening...")
+            self.voice_status.setStyleSheet(voice_status_style("on"))
 
+    # calibration
     def start_calibration(self):
-        """Start the calibration process"""
-        import backend
         backend.calibration_start_time = time.time()
         backend.is_calibrating = True
         backend.calibration_data = {k: [] for k in backend.calibration_data}
-        print("[GUI] Calibration started")
-        self.stats_display.setText("⚙️ Calibration started! Maintain good posture for 8 seconds...")
+        self.stats_display.setText("Calibration started. Hold posture 8s...")
+
+    # logs
     def load_log(self):
-        
         try:
             log_path = os.path.join(os.path.dirname(__file__), "posture_trend_log.csv")
-
-            print(f"[DEBUG] Absolute path: {os.path.abspath(log_path)}")
-            print(f"[DEBUG] File exists: {os.path.exists(log_path)}")
-
             if os.path.exists(log_path):
-                expected_columns = ["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt", "Confidence Score"]
-                df = pd.read_csv(log_path, header=None, names=expected_columns)
-
-                
-        
-                # Show only recent entries
-                display_df = df[expected_columns].tail(50).reset_index()
-
-                self.log_table.setColumnCount(len(expected_columns))
-                self.log_table.setHorizontalHeaderLabels(expected_columns)
+                expected = ["Timestamp","Mode","Facing","Posture Status","Head Tilt","Confidence Score"]
+                df = pd.read_csv(log_path, header=None, names=expected)
+                display_df = df[expected].tail(50).reset_index(drop=True)
+                self.log_table.setColumnCount(len(expected))
+                self.log_table.setHorizontalHeaderLabels(expected)
                 self.log_table.setRowCount(len(display_df))
-
-                for row_idx, row in display_df.iterrows():
-                    for col_idx, col_name in enumerate(expected_columns):
-                        value = row[col_name]
-                        if pd.isna(value):
-                            value = "—"
-                        item = QTableWidgetItem(str(value))
-
-                        # ✨ Default to white text
-                        item.setForeground(Qt.white)
-
-                        # 🎨 Highlight Posture Status
-                        if col_name == "Posture Status":
-                            label = str(value).lower()
-                            if "bad" in label:
-                                item.setForeground(Qt.red)
-                            elif "good" in label:
-                                item.setForeground(Qt.green)
-                            elif "moderate" in label:
-                                item.setForeground(Qt.darkYellow)
-
-                        self.log_table.setItem(row_idx, col_idx, item)
-
-                # Optional: enable dark theme styling
-                self.log_table.setStyleSheet("""
-                    QTableWidget {
-                        background-color: #1e1e1e;
-                        color: white;
-                        gridline-color: #444;
-                    }
-                    QHeaderView::section {
-                        background-color: #2d2d2d;
-                        color: white;
-                        font-weight: bold;
-                    }
-                """)
-
+                for r, row in display_df.iterrows():
+                    for c, name in enumerate(expected):
+                        v = row[name]; v = "—" if pd.isna(v) else v
+                        item = QTableWidgetItem(str(v))
+                        if name == "Posture Status":
+                            label = str(v).lower()
+                            if "bad" in label: item.setForeground(QColor("#C62828"))
+                            elif "good" in label: item.setForeground(QColor("#2E7D32"))
+                            elif "moderate" in label: item.setForeground(QColor("#B26A00"))
+                        self.log_table.setItem(r, c, item)
             else:
-                self.log_table.setRowCount(1)
-                self.log_table.setColumnCount(1)
-                self.log_table.setItem(0, 0, QTableWidgetItem("📂 No log file found."))
-
+                self.log_table.setRowCount(1); self.log_table.setColumnCount(1); self.log_table.setItem(0,0,QTableWidgetItem("📂 No log file found."))
         except Exception as e:
-            self.log_table.setRowCount(1)
-            self.log_table.setColumnCount(1)
-            self.log_table.setItem(0, 0, QTableWidgetItem(f"❌ Error loading log: {e}"))
-    
+            self.log_table.setRowCount(1); self.log_table.setColumnCount(1); self.log_table.setItem(0,0,QTableWidgetItem(f"❌ Error loading log: {e}"))
+
+    # devs popup
     def expand_folder_popup(self):
-        if hasattr(self, 'folder_popup') and self.folder_popup.isVisible():
-            return  # prevent double popups
-
-        self.folder_popup = QFrame(self)
-        self.folder_popup.setStyleSheet("""
-            QFrame {
-                background-color: rgba(255, 255, 255, 240);
-                border: 3px solid black;
-                border-radius: 12px;
-            }
-        """)
-        self.folder_popup.setVisible(True)
-        self.folder_popup.raise_()
-
-        # Add layout to the popup
-        popup_layout = QVBoxLayout(self.folder_popup)
-        popup_layout.setContentsMargins(20, 20, 20, 20)
-        popup_layout.setSpacing(10)
-        # Create a grid layout for the top row (title + close)
-        header_grid = QGridLayout()
-
-        # Close button (top-right)
-        self.close_button = QPushButton("✖")
-        self.close_button.setFixedSize(30, 30)
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background-color: #ff6666;
-                color: white;
-                font-size: 16px;
-                border: 2px solid black;
-                border-radius: 6px;
-                padding: 2px;
-            }
-            QPushButton:hover {
-                background-color: #cc0000;
-            }
-        """)
-        self.close_button.clicked.connect(self.folder_popup.close)
-
-        # Title
-        self.devs_title = QLabel("Meet the Devs of Spinewise")
-        self.devs_title.setFont(QFont("Press Start 2P", 12))
-        self.devs_title.setAlignment(Qt.AlignCenter)
-        self.devs_title.setStyleSheet("""
-            font-family: "Press Start 2P";
-            font-size: 12px;
-            color: black;
-            background-color: transparent;
-            border: none;
-        """)
-
-        # Inner header layout for close + title
-        # Centered title with close button on top-right
+        if hasattr(self, 'folder_popup') and self.folder_popup.isVisible(): return
+        self.folder_popup = QFrame(self); self.folder_popup.setStyleSheet(POPUP_FRAME_QSS); self.folder_popup.setVisible(True); self.folder_popup.raise_()
+        popup_layout = QVBoxLayout(self.folder_popup); popup_layout.setContentsMargins(20,20,20,20); popup_layout.setSpacing(10)
         header_layout = QGridLayout()
-
-        # Place title in center column
+        self.close_button = QPushButton("✖"); self.close_button.setFixedSize(30,30)
+        self.close_button.setStyleSheet("QPushButton { background-color: #E55353; color: white; border: none; border-radius: 6px; } QPushButton:hover { background-color: #C94444; }")
+        self.close_button.clicked.connect(self.folder_popup.close)
+        self.devs_title = QLabel("Meet the Devs of Spinewise"); self.devs_title.setFont(QFont(self.app_font.family(), 14, QFont.DemiBold)); self.devs_title.setAlignment(Qt.AlignCenter); self.devs_title.setStyleSheet("color: #0B5CAD;")
         header_layout.addWidget(self.devs_title, 0, 1, alignment=Qt.AlignHCenter)
-
-        # Place close button in top-right corner
         header_layout.addWidget(self.close_button, 0, 2, alignment=Qt.AlignRight)
-
-        # Add stretch in first column to push title to center
-        header_layout.setColumnStretch(0, 1)
-        header_layout.setColumnStretch(1, 2)
-        header_layout.setColumnStretch(2, 1)
-
+        header_layout.setColumnStretch(0,1); header_layout.setColumnStretch(1,2); header_layout.setColumnStretch(2,1)
         popup_layout.addLayout(header_layout)
-        # --- Carousel Setup ---
-        self.carousel_widget = QStackedWidget()
-        self.carousel_widget.setFixedHeight(int(self.height() * 0.6))  # ~60% of popup height
-  # Adjust as needed
+
+        self.carousel_widget = QStackedWidget(); self.carousel_widget.setFixedHeight(int(self.height()*0.6))
 
         devs_info = [
             ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdyapermuy/", "https://github.com/Emdya"),
@@ -1620,358 +627,129 @@ class App(QMainWindow):
             ("John Pena ", "Backend and Machine Learning Development", "assets/dev4.png", "https://www.linkedin.com/in/johnpenacs/", "https://github.com/jpena173"),
             ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png", "https://www.linkedin.com/in/jake-rodriguez-917a24142/","https://github.com/jrodr995"),
         ]
-
         captions = [
-            "Emdya Permuy-Llovio is an Undergraduate BS in Computer Science student at Florida International University, who is planning on specializing in AI Global Policy and Machine Learning Programming. She intends to pursue graduate studies and acquire a PhD in Machine Learning. Emdya has published her own Java programming introduction textbook in her freshman year of University, grown a following in the tech field with 6,000 followers on LinkedIn, published a Chrome extension to help students manage their stress levels during finals week, and attended various programming-related events such as hackathons and conferences across the world. ",
-            "Juan A. Mieses is a Florida International University Undergraduate student pursuing a Bachelor's Degree of Science in Computer Science, tackling ethical approaches to fullstack development and programming, with an interest in game development and writing fiction. In charge of frontend and UI/UX choices within SpineWise, this is the first time he's worked extensively with frontend rather than backend, utilizing this opportunity to diversify his skillset and give input on a project with a tangibly beneficial impact.",
+            "Emdya Permuy-Llovio is an Undergraduate BS in Computer Science student at Florida International University... ",
+            "Juan A. Mieses is a Florida International University Undergraduate student pursuing a Bachelor's Degree... ",
             "Javier builds solid infrastructure and efficient code.",
-            "John Pena is an aspiring undergraduate studying Computer Science, preferring cybersecurity tasks and backend development with both high-level and low-level languages.",
+            "John Pena is an aspiring undergraduate studying Computer Science, preferring cybersecurity tasks and backend development...",
             "Jake crafts beautiful alert systems and UI animations."
         ]
 
-        # Create dev cards
-        for index, (name, role, img_path, linkedin, github) in enumerate(devs_info):
-            card = QWidget()
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(30, 10, 30, 10)  # Add breathing room horizontally
-            card_layout.setSpacing(12)
-            card_layout.setAlignment(Qt.AlignCenter)
-            card.setStyleSheet("""
-                background-color: white;
-                border: 2px solid black;
-                border-radius: 12px;
-            """)
-            image = QLabel()
-            image.setPixmap(QPixmap(img_path).scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            image.setAlignment(Qt.AlignCenter)
-            card_layout.addWidget(image)
+        for idx, (name, role, img_path, linkedin, github) in enumerate(devs_info):
+            card = QWidget(); card_layout = QVBoxLayout(card); card_layout.setContentsMargins(30,10,30,10); card_layout.setSpacing(12); card_layout.setAlignment(Qt.AlignCenter)
+            card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #D5E3F4; border-radius: 12px;")
+            image = QLabel(); image.setPixmap(QPixmap(img_path).scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)); image.setAlignment(Qt.AlignCenter); card_layout.addWidget(image)
+            name_label = QLabel(name); name_label.setFont(QFont(self.app_font.family(), 12, QFont.Medium)); name_label.setAlignment(Qt.AlignCenter); name_label.setStyleSheet("color: #0F2238; padding: 8px"); card_layout.addWidget(name_label)
 
-            # Name
-            name_label = QLabel(name)
-            name_label.setFont(QFont("Press Start 2P", 12))
-            name_label.setAlignment(Qt.AlignCenter)
-            name_label.setStyleSheet("color: black; padding: 8px")
-            card_layout.addWidget(name_label)
-            #
-            # Role + LinkedIn icon side-by-side
-            # Role + GitHub + LinkedIn icon layout
-            role_row = QHBoxLayout()
-            role_row.setAlignment(Qt.AlignCenter)
+            role_row = QHBoxLayout(); role_row.setAlignment(Qt.AlignCenter)
+            github_button = QPushButton(); github_button.setCursor(Qt.PointingHandCursor); github_button.setIcon(QIcon("assets/icons/GitHub_Invertocat_Dark.png"))
+            github_button.setIconSize(QSize(20,20)); github_button.setFixedSize(28,28); github_button.setStyleSheet("QPushButton { background: transparent; border: none; } QPushButton:hover { background: #F0F4FF; border-radius: 6px; }")
+            github_button.clicked.connect(lambda _, url=github: QDesktopServices.openUrl(QUrl(url))); role_row.addWidget(github_button)
 
-            # GitHub Button (LEFT of role)
-            github_button = QPushButton()
-            github_button.setCursor(Qt.PointingHandCursor)
-            github_button.setIcon(QIcon("assets/icons/GitHub_Invertocat_Dark.png"))  
-            github_button.setIconSize(QSize(20, 20))
-            github_button.setFixedSize(28, 28)
-            github_button.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    border: none;
-                    margin-right: 8px;
-                }
-                QPushButton:hover {
-                    background-color: #e6e6e6;
-                    border-radius: 6px;
-                }
-            """)
-            github_button.clicked.connect(lambda _, url=github: QDesktopServices.openUrl(QUrl(url)))
-            role_row.addWidget(github_button)
+            role_label = QLabel(role); role_label.setStyleSheet("color: #5A6B84;"); role_row.addWidget(role_label)
 
-            # Role Label
-            role_label = QLabel(role)
-            role_label.setFont(QFont("Press Start 2P", 10))
-            role_label.setStyleSheet("color: gray;")
-            role_row.addWidget(role_label)
-
-            # LinkedIn Button (RIGHT of role)
-            linkedin_button = QPushButton()
-            linkedin_button.setCursor(Qt.PointingHandCursor)
-            linkedin_button.setIcon(QIcon("assets/icons/LinkedIn_logo_initials.png"))
-            linkedin_button.setIconSize(QSize(20, 20))
-            linkedin_button.setFixedSize(28, 28)
-            linkedin_button.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    border: none;
-                    margin-left: 8px;
-                }
-                QPushButton:hover {
-                    background-color: #d0e7ff;
-                    border-radius: 6px;
-                }
-            """)
-            linkedin_button.clicked.connect(lambda _, url=linkedin: QDesktopServices.openUrl(QUrl(url)))
-            role_row.addWidget(linkedin_button)
-
-            #
+            linkedin_button = QPushButton(); linkedin_button.setCursor(Qt.PointingHandCursor); linkedin_button.setIcon(QIcon("assets/icons/LinkedIn_logo_initials.png"))
+            linkedin_button.setIconSize(QSize(20,20)); linkedin_button.setFixedSize(28,28); linkedin_button.setStyleSheet("QPushButton { background: transparent; border: none; } QPushButton:hover { background: #F0F4FF; border-radius: 6px; }")
+            linkedin_button.clicked.connect(lambda _, url=linkedin: QDesktopServices.openUrl(QUrl(url))); role_row.addWidget(linkedin_button)
 
             card_layout.addLayout(role_row)
-            # Caption section
-            caption_label = QLabel(captions[index])
-            caption_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            caption_label.setMinimumWidth(int(self.width() * 0.7))  # Stretch ~70% of popup width
-            caption_label.setMaximumWidth(int(self.width() * 0.85))  # Prevent it from being too wide
-            caption_label.setFont(QFont("Press Start 2P", 9))
-            caption_label.setTextFormat(Qt.RichText)
-            caption_label.setText(f"""
-                <div style='
-                    line-height: 140%;
-                    letter-spacing: 1.2px;
-                    word-spacing: 4px;
-                    padding: 12px 24px;
-                    color: #333;
-                    font-family: "Press Start 2P";
-                    font-size: 10px;
-                    text-align: center;
-                '>
-                    {captions[index]}
-                </div>
-            """)
 
-            caption_label.setAlignment(Qt.AlignCenter)
-            caption_label.setWordWrap(True)
-
-            card_layout.addWidget(caption_label)
-
-            
-
+            caption_label = QLabel(captions[idx]); caption_label.setWordWrap(True); caption_label.setAlignment(Qt.AlignCenter); caption_label.setStyleSheet("color: #2E3C51;"); card_layout.addWidget(caption_label)
             self.carousel_widget.addWidget(card)
-            
 
         popup_layout.addWidget(self.carousel_widget)
 
-        # --- Navigation + Pagination ---
-        nav_layout = QHBoxLayout()
-        nav_layout.setAlignment(Qt.AlignCenter)
-
-        # Left Arrow
-        left_btn = QPushButton("◀")
-        left_btn.setFixedSize(30, 30)
-        left_btn.setStyleSheet("font-size: 18px; border: none; background-color: #ccc; border-radius: 15px;")
+        nav_layout = QHBoxLayout(); nav_layout.setAlignment(Qt.AlignCenter)
+        left_btn = QPushButton("◀"); left_btn.setFixedSize(30,30); left_btn.setStyleSheet("QPushButton { background: #EAF2FF; color: #0F2238; border-radius: 15px; } QPushButton:hover { background: #DDEBFF; }")
         left_btn.clicked.connect(lambda: self.carousel_widget.setCurrentIndex((self.carousel_widget.currentIndex() - 1) % self.carousel_widget.count()))
         nav_layout.addWidget(left_btn)
 
-        # Pagination Dots
-        dot_group = QButtonGroup()
-        self.pagination_dots = []
-
-     
-
-        for i in range(len(devs_info)):
-            dot = QRadioButton()
-            dot.setStyleSheet("""
-                QRadioButton::indicator {
-                    width: 10px;
-                    height: 10px;
-                    border-radius: 5px;
-                    background-color: #ccc;
-                }
-                QRadioButton::indicator:checked {
-                    background-color: black;
-                }
-            """)
+        dot_group = QButtonGroup(); self.pagination_dots = []
+        for i in range(self.carousel_widget.count()):
+            dot = QRadioButton(); dot.setStyleSheet(DOT_QSS)
             dot.toggled.connect(lambda checked, idx=i: self.carousel_widget.setCurrentIndex(idx) if checked else None)
-            dot_group.addButton(dot)
-            self.pagination_dots.append(dot)
-            nav_layout.addWidget(dot)
+            dot_group.addButton(dot); self.pagination_dots.append(dot); nav_layout.addWidget(dot)
 
-        # Right Arrow
-        right_btn = QPushButton("▶")
-        right_btn.setFixedSize(30, 30)
-        right_btn.setStyleSheet("font-size: 18px; border: none; background-color: #ccc; border-radius: 15px;")
+        right_btn = QPushButton("▶"); right_btn.setFixedSize(30,30); right_btn.setStyleSheet("QPushButton { background: #EAF2FF; color: #0F2238; border-radius: 15px; } QPushButton:hover { background: #DDEBFF; }")
         right_btn.clicked.connect(lambda: self.carousel_widget.setCurrentIndex((self.carousel_widget.currentIndex() + 1) % self.carousel_widget.count()))
         nav_layout.addWidget(right_btn)
-
         popup_layout.addLayout(nav_layout)
 
-        # Set first dot checked
-        self.pagination_dots[0].setChecked(True)
-
-        # Sync dot selection with carousel change
-        def sync_dots(index):
-            self.pagination_dots[index].setChecked(True)
-
+        if self.pagination_dots: self.pagination_dots[0].setChecked(True)
+        def sync_dots(index): 
+            if 0 <= index < len(self.pagination_dots): self.pagination_dots[index].setChecked(True)
         self.carousel_widget.currentChanged.connect(sync_dots)
 
-
-        # Animate expansion
-        start_pos = self.folder_icon.mapToGlobal(self.folder_icon.rect().center())
-        start_pos = self.mapFromGlobal(start_pos)
+        start_pos = self.folder_icon.mapToGlobal(self.folder_icon.rect().center()); start_pos = self.mapFromGlobal(start_pos)
         self.folder_popup.setGeometry(QRect(start_pos.x(), start_pos.y(), 10, 10))
+        end_w = int(self.width() * 0.8); end_h = int(self.height() * 0.7); end_x = int((self.width() - end_w) / 2); end_y = int((self.height() - end_h) / 2)
+        self.popup_anim = QPropertyAnimation(self.folder_popup, b"geometry"); self.popup_anim.setDuration(400)
+        self.popup_anim.setStartValue(self.folder_popup.geometry()); self.popup_anim.setEndValue(QRect(end_x, end_y, end_w, end_h)); self.popup_anim.setEasingCurve(QEasingCurve.OutCubic); self.popup_anim.start()
 
-        end_width = int(self.width() * 0.8)
-        end_height = int(self.height() * 0.7)
-        end_x = int((self.width() - end_width) / 2)
-        end_y = int((self.height() - end_height) / 2)
-
-        self.popup_anim = QPropertyAnimation(self.folder_popup, b"geometry")
-        self.popup_anim.setDuration(400)
-        self.popup_anim.setStartValue(self.folder_popup.geometry())
-        self.popup_anim.setEndValue(QRect(end_x, end_y, end_width, end_height))
-        self.popup_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self.popup_anim.start()
-
-
-    
+    # data mgmt
     def clear_log(self):
         try:
             if os.path.exists("posture_trend_log.csv"):
-                os.remove("posture_trend_log.csv")
-                print("[INFO] Log file cleared")
-                self.log_table.setRowCount(1)
-                self.log_table.setItem(0, 0, QTableWidgetItem("🗑️ Log data cleared."))
+                os.remove("posture_trend_log.csv"); self.log_table.setRowCount(1); self.log_table.setItem(0,0,QTableWidgetItem("🗑️ Log data cleared."))
             else:
-                self.log_table.setRowCount(1)
-                self.log_table.setItem(0, 0, QTableWidgetItem("📂 No log file to clear."))
+                self.log_table.setRowCount(1); self.log_table.setItem(0,0,QTableWidgetItem("📂 No log file to clear."))
         except Exception as e:
-            print(f"[ERROR] Failed to clear log: {e}")
+            print("[ERROR] clear_log:", e)
 
     def export_log(self):
         if os.path.exists("posture_trend_log.csv"):
-            dest, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save Log",
-                "posture_trend_log.csv",
-                "CSV Files (*.csv)"
-            )
+            dest, _ = QFileDialog.getSaveFileName(self, "Save Log", "posture_trend_log.csv", "CSV Files (*.csv)")
             if dest:
                 try:
-                    with open("posture_trend_log.csv", "r") as src:
-                        with open(dest, "w") as dst:
-                            dst.write(src.read())
-                    print(f"[INFO] Log exported to {dest}")
-                    self.stats_display.setText(f"💾 Log exported successfully!")
+                    with open("posture_trend_log.csv", "r") as src, open(dest, "w") as dst: dst.write(src.read())
+                    self.stats_display.setText("Log exported.")
                 except Exception as e:
-                    print(f"[ERROR] Failed to export: {e}")
-                    self.stats_display.setText(f"❌ Export failed: {e}")
+                    self.stats_display.setText(f"Export failed: {e}")
         else:
-            self.stats_display.setText("📂 No log file found to export")
+            self.stats_display.setText("No log file to export")
 
+    # camera control
     def start_video(self):
-        print("[INFO] Start button clicked")
-
-        # Stop any existing thread first
         if self.video_thread and self.video_thread.isRunning():
-            print("[INFO] Stopping existing video thread...")
-            self.video_thread._run_flag = False
-            self.video_thread.wait(1000)  # Wait up to 1 second
-
-        # Create a completely new video thread
-        print("[INFO] Creating new video thread...")
+            self.video_thread._run_flag = False; self.video_thread.wait(1000)
         self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
-
-
-
-        # Start the new thread
         self.video_thread.start()
-
-        # Update UI
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.stats_display.setText(" Camera starting...")
-        self.image_label.setMinimumSize(640, 480)
-        self.image_label.setStyleSheet("""
-            background-color: transparent;
-            border: none;
-        """)
-        self.image_label.setText("")  # Remove placeholder
-        
-        # Set initial monitoring state - this won't change until we get stable results
-        self.posture_status.setText("Monitoring Posture...")
-        self.posture_status.setStyleSheet("""
-            font-size: 20px; 
-            font-weight: bold; 
-            padding: 15px; 
-            background-color: #cce5ff; 
-            border: 2px solid #007bff;
-            border-radius: 10px;
-            color: #004085;
-        """)
-
-        print("[INFO] New video thread started")
+        self.start_button.setEnabled(False); self.stop_button.setEnabled(True)
+        self.stats_display.setText("Camera starting..."); self.image_label.setMinimumSize(800,480); self.image_label.setText("")
+        self.posture_status.setText("Monitoring Posture..."); self.posture_status.setStyleSheet(posture_style("monitor"))
 
     def stop_video(self):
-        print("[INFO] Stop button clicked - stopping camera only, keeping app open")
-
         if self.video_thread and self.video_thread.isRunning():
-            print("[INFO] Video thread is running, stopping it...")
-
-            # Set the stop flag first
             self.video_thread._run_flag = False
-            print("[INFO] Set video thread stop flag")
-
-            # Give the thread a moment to finish its current iteration
             QTimer.singleShot(100, self.finish_video_stop)
         else:
-            print("[INFO] Video thread was not running")
             self.finish_video_stop()
 
     def finish_video_stop(self):
-        """Complete the video stopping process"""
-        print("[INFO] Finishing video stop process...")
-
-        # Don't call wait() - just let the thread finish naturally
         if self.video_thread and self.video_thread.isRunning():
-            print("[INFO] Thread still running, waiting a bit more...")
-            # Give it more time and try again
             QTimer.singleShot(500, self.force_video_stop)
         else:
-            print("[INFO] Thread stopped naturally")
             self.update_ui_after_stop()
 
     def force_video_stop(self):
-        """Force stop if thread doesn't stop naturally"""
-        print("[INFO] Force stopping video thread...")
-
         if self.video_thread and self.video_thread.isRunning():
-            try:
-                # Try terminate as last resort, but don't wait indefinitely
-                self.video_thread.terminate()
-                print("[INFO] Thread terminated")
-            except Exception as e:
-                print(f"[INFO] Error terminating thread: {e}")
-
+            try: self.video_thread.terminate()
+            except Exception: pass
         self.update_ui_after_stop()
 
     def update_ui_after_stop(self):
-        """Update UI after video is stopped"""
-        print("[INFO] Updating UI after video stop...")
-
-        # Update UI state
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.stats_display.setText(" Camera stopped")
-        self.posture_status.setText(" Camera Stopped")
-        self.posture_status.setStyleSheet("""
-            font-size: 20px; 
-            font-weight: bold; 
-            padding: 15px; 
-            background-color: #f0f0f0; 
-            border: 2px solid #ccc;
-            border-radius: 10px;
-            color: #333;
-        """)
-        pixel_font = QFont("Press Start 2P", 8)
-        pixel_font.setStyleStrategy(QFont.NoAntialias)
-        self.image_label.setFont(pixel_font)
-        self.image_label.setText("Click 'Start Camera' to begin webcam feed")
-        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.image_label.setText("Click 'Start Camera' to begin webcam feed")
-        self.image_label.clear()  # Clear any existing image
-
-        print("[INFO] UI updated - app should remain open")
-
-        # Verify app is still alive
+        self.start_button.setEnabled(True); self.stop_button.setEnabled(False)
+        self.stats_display.setText("Camera stopped")
+        self.posture_status.setText("Camera Stopped"); self.posture_status.setStyleSheet(posture_style("stopped"))
+        self.image_label.setText("Click 'Start Camera' to begin webcam feed"); self.image_label.clear()
         QTimer.singleShot(1000, self.check_app_status)
 
     def check_app_status(self):
-        """Check if the app is still running after stop command"""
-        print("[DEBUG] App status check - if you see this, the app is still running!")
-        self.stats_display.setText("⏹️ Camera stopped - App is running normally")
-    
+        self.stats_display.setText("⏹️ Camera stopped - App is running")
+
+    # events
     def eventFilter(self, source, event):
         if source == self.folder_icon:
             if event.type() == QEvent.Enter:
@@ -1981,111 +759,36 @@ class App(QMainWindow):
             elif event.type() == QEvent.MouseButtonPress:
                 self.expand_folder_popup()
         return super().eventFilter(source, event)
-           
-
-
 
     def update_image(self, qt_image):
         pixmap = QPixmap.fromImage(qt_image)
-        scaled_pixmap = pixmap.scaled(
-            self.image_label.size(), 
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
-        )
-
-        self.image_label.setPixmap(scaled_pixmap)
+        scaled = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.image_label.setPixmap(scaled)
 
     def update_stats(self, text):
-        # Always update the detailed analysis section immediately
         current_text = self.stats_display.text()
-        if "🎤 Voice Command:" not in current_text:
+        if "Voice" not in current_text:
             self.stats_display.setText(f"Analysis: {text}")
-        
-        # Only update the main posture status for STABLE, confirmed results
-        # Don't update for transitioning states or temporary detections
-        if text and not any(unstable_word in text.lower() for unstable_word in
-                            ["detecting", "stabilizing", "transitioning", "confirming", "analyzing"]):
-
-            # Only update main status for confident, stable results
-            if "good posture" in text.lower():
-                self.posture_status.setText(" Good Posture")
-                self.posture_status.setStyleSheet("""
-                    font-size: 20px; 
-                    font-weight: bold; 
-                    padding: 15px; 
-                    background-color: #d4edda; 
-                    border: 2px solid #28a745;
-                    border-radius: 10px;
-                    color: #155724;
-                """)
-            elif "moderately bad posture" in text.lower() or "moderate" in text.lower():
-                self.posture_status.setText("Moderate Posture Issues")
-                self.posture_status.setStyleSheet("""
-                    font-size: 20px; 
-                    font-weight: bold; 
-                    padding: 15px; 
-                    background-color: #fff3cd; 
-                    border: 2px solid #ffc107;
-                    border-radius: 10px;
-                    color: #856404;
-                """)
-            elif "bad posture" in text.lower():
-                self.posture_status.setText(" Poor Posture Detected")
-                self.posture_status.setStyleSheet("""
-                    font-size: 20px; 
-                    font-weight: bold; 
-                    padding: 15px; 
-                    background-color: #f8d7da; 
-                    border: 2px solid #dc3545;
-                    border-radius: 10px;
-                    color: #721c24;
-                """)
-            elif "no pose" in text.lower():
-                self.posture_status.setText(" No Person Detected")
-                self.posture_status.setStyleSheet("""
-                    font-size: 20px; 
-                    font-weight: bold; 
-                    padding: 15px; 
-                    background-color: #e2e3e5; 
-                    border: 2px solid #6c757d;
-                    border-radius: 10px;
-                    color: #495057;
-                """)
-
-        # For transitioning/analyzing states, keep current main status but show activity in detailed section
-        # The main status will only change when we get a confirmed, stable result
+        if text and not any(w in text.lower() for w in ["detecting","stabilizing","transitioning","confirming","analyzing"]):
+            tl = text.lower()
+            if "good posture" in tl:
+                self.posture_status.setText("Good Posture"); self.posture_status.setStyleSheet(posture_style("good"))
+            elif "moderately bad posture" in tl or "moderate" in tl:
+                self.posture_status.setText("Moderate Posture Issues"); self.posture_status.setStyleSheet(posture_style("moderate"))
+            elif "bad posture" in tl:
+                self.posture_status.setText("Poor Posture Detected"); self.posture_status.setStyleSheet(posture_style("bad"))
+            elif "no pose" in tl:
+                self.posture_status.setText("No Person Detected"); self.posture_status.setStyleSheet(posture_style("stopped"))
 
     def closeEvent(self, event):
-        """Handle window closing"""
-        print("[GUI]  closeEvent triggered - checking why...")
-        
-        # Print stack trace to see what's calling close
-        import traceback
-        print("[GUI] Close event stack trace:")
-        traceback.print_stack()
-
-        print("[GUI] Stopping threads before closing...")
-
-        # Stop video thread
-        if self.video_thread.isRunning():
-            print("[GUI] Stopping video thread...")
-            self.video_thread.stop()
-
-        # Stop speech thread
-        if self.speech_thread.isRunning():
-            print("[GUI] Stopping speech thread...")
-            self.speech_thread.stop()
-
-        print("[GUI] All threads stopped, accepting close event")
+        if self.video_thread.isRunning(): self.video_thread.stop()
+        if self.speech_thread.isRunning(): self.speech_thread.stop()
         event.accept()
-        print("[GUI] Application closed")
 
 
-# Main application launcher
 if __name__ == '__main__':
     import sys
     from PyQt5.QtWidgets import QApplication
-
     app = QApplication(sys.argv)
     window = App()
     window.show()

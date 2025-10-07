@@ -4,3 +4,9 @@ posture_images/
 *.task
 spinewise-clean/
 *.zip
+__pycache__/
+resistance_bands_results.csv
+posture_corrector_results.csv
+neck_pillow_results.csv
+posture_dataset.csv
+posture_trend_log.csv

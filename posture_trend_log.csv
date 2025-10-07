@@ -1,8 +1,4 @@
 Timestamp,Mode,Facing,Posture Status,Head Tilt,Confidence Score
 2025-07-24 09:25:30,front,front,Good Posture,0.02072635293006897,4
 2025-07-24 09:25:33,front,front,Detecting moderate... (1.9s),0.020465463399887085,0
-2025-07-24 09:25:36,front,front,Detecting moderate... (2.0s),0.020000934600830078,5
-2025-07-24 09:25:39,front,front,Good Posture,0.02076396346092224,2
-2025-07-24 09:25:42,front,front,Good Posture,0.016376912593841553,3
-2025-07-24 09:25:45,front,front,Good Posture,0.012722820043563843,1
-2025-07-24 09:25:48,front,front,Moderately Bad Posture,0.01858314871788025,2
+
