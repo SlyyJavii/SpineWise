@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QPixmap, QIcon, QFontDatabase, QPalette, QBrush, QPixmap, QPainter
 from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve, QThread, QSize, pyqtSignal, QEvent, \
-    QTimer, QPoint, QThread, QObject
+    QTimer, QPoint, QThread, QObject, QTimer
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker,
     draw_landmarks, normalize_lighting, is_calibrating,
@@ -29,8 +29,6 @@ from backend import (
 )
 
 from poll import reader
-
-import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -39,7 +37,7 @@ class GraphThread(QObject):
     finished = pyqtSignal()
     progress = pyqtSignal()
     # constructor provides function and arguments
-    def __init__(self, btn = None):
+    def __init__(self):
         super().__init__()
         self.file = None
         # basic file exception handling
@@ -47,73 +45,58 @@ class GraphThread(QObject):
             self.file = open("posture_trend_log.csv", "rb")
         except FileNotFoundError:
             raise
-        self.btn = btn
         plt.style.use('bmh')
-        self.figure = Figure(figsize=(6, 3))
+        self.figure = Figure(figsize=(8, 4))
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.ax = self.figure.add_subplot(111)
-        self.y = 0
-        self.ylabel = ""
+        self.canvas.ax1 = self.figure.add_subplot(121)
+        self.canvas.ax2 = self.figure.add_subplot(122)
         self.xdata = [0]
-        self.ydata = [[0], [0], [0]]
+        self.ydata = [[0], [0]]
+        self.tab = False
+    
+    def set_tab(self, index):
+        if (index == 1):
+            self.tab = True
+        else:
+            self.tab = False
 
     # thread executes provided functions(arguments)
     def run(self):
         """(Re)draw the placeholder analytics plot. ALL OF THIS IS DUD RNG"""
-        try:
-            self.progress.emit()
-            # Placeholder data generator just for UI assurance purposes.
-            # Jason this is where you'd write the CSV translation stuff HOPEFULLY.
-            # Not sure if it's better to do it in backend.py or a new py file or here. Shrug!
-            # X axis: recent timestamps (strings) or frame indices
-            sel = self.btn.currentText() if hasattr(self, "btn") else "Confidence (placeholder)"
-            if "Confidence" in sel:
-                self.y = self.ydata[0]
-                self.ylabel = "Confidence (0-7 scaled)"
-            elif "Head Tilt" in sel:
-                self.y = self.ydata[1]
-                self.label = "Head tilt (normalized)"
-            else:
-                self.y = self.ydata[2]
-                self.ylabel = "Nerd Neck/Clavicle Tilt"
-            interval = 3
-            for row in csv.reader(reader(self.file)):
-                if (len(row) != 6 or not (row[-1].isdigit()) ):
-                    return
-                (self.ydata[0]).append(int(row[-1]))
-                (self.ydata[1]).append(float(row[4]))
-                (self.xdata).append(self.xdata[-1]+interval)
-                # Clear figure and plot
-                self.plot()
-        except Exception as e:
-            print("[ANALYTICS] Failed to update plot:", e)
-        #self.refresh_plot_btn.setEnabled(True)
-        #self.metric_combo.setEnabled(True)
+        self.progress.emit()
+        if self.tab:
+            try:
+                interval = 3
+                for row in csv.reader(reader(self.file)):
+                    if (len(row) != 6 or not (row[-1].isdigit()) ):
+                        return
+                    (self.ydata[0]).append(int(row[-1]))
+                    (self.ydata[1]).append(float(row[4]))
+                    (self.xdata).append(self.xdata[-1]+interval)
+                    # Clear figure and plot
+                    self.plot()
+            except Exception as e:
+                print("[ANALYTICS] Failed to update plot:", e)
         self.finished.emit()
     
     def plot(self):
-        self.canvas.ax.cla()
-        self.canvas.ax.plot(self.xdata, self.y, marker='o', linewidth=1)
-        self.canvas.ax.set_title(f"{self.ylabel} over time")
-        self.canvas.ax.set_xlabel("Sample")
-        self.canvas.ax.set_ylabel(self.ylabel)
-        self.canvas.ax.grid(True)
+        self.canvas.ax1.cla()
+        self.canvas.ax1.plot(self.xdata, self.ydata[0], marker='o', linewidth=1)
+        self.canvas.ax1.set_title("Confidence (0-7 scaled) over time")
+        self.canvas.ax1.set_xlabel("Sample")
+        self.canvas.ax1.set_ylabel("Confidence (0-7 scaled)")
+        self.canvas.ax1.grid(True)
+
+        self.canvas.ax2.cla()
+        self.canvas.ax2.plot(self.xdata, self.ydata[1], marker='o', linewidth=1)
+        self.canvas.ax2.set_title("Head tilt (normalized) over time")
+        self.canvas.ax2.set_xlabel("Sample")
+        self.canvas.ax2.set_ylabel("Head tilt (normalized)")
+        self.canvas.ax2.grid(True)
 
         self.figure.tight_layout()
+        plt.pause(0.25)
         self.canvas.draw()
-    
-    def index_changed(self, index):
-        match index:
-            case 0:
-                self.y = self.ydata[0]
-                self.ylabel = "Confidence (0-7 scaled)"
-            case 1:
-                self.y = self.ydata[1]
-                self.label = "Head tilt (normalized)"
-            case 2:
-                self.y = self.ydata[2]
-                self.ylabel = "Nerd Neck/Clavicle Tilt"
-        self.plot()
 
 class SpeechRecognitionThread(QThread):
     """Thread for continuous speech recognition"""
@@ -782,54 +765,30 @@ class App(QMainWindow):
         self.live_tab.layout().addWidget(live_wrapper)
 
     def init_analytics_tab(self):
-        """FOR JASON. This was a bit of a hassle because I don't know what direction you'll take this, nor do I know how"""
-        """to potentially thread any data through here, but I've set this up as best I can."""
         # Main container layout
-        
         layout = QVBoxLayout()
         title = QLabel("Posture Analytics")
         title.setFont(QFont("Press Start 2P", 14))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        # Placeholder controls: refresh and some options
-        controls_layout = QHBoxLayout()
-        self.refresh_plot_btn = QPushButton("🔄 Refresh Plot")
-        self.refresh_plot_btn.setFont(QFont("Press Start 2P", 9))
-
-        # A small placeholder dropdown for which metric to plot
-        self.metric_combo = QComboBox()
-        self.metric_combo.addItems(["Confidence (placeholder)", "Head Tilt", "Clavicle Drop"])
-
         self.thread = QThread()
-        self.graph_thread = GraphThread(self.metric_combo)
+        self.graph_thread = GraphThread()
         self.graph_thread.moveToThread(self.thread)
-
         layout.addWidget(self.graph_thread.canvas)
-        controls_layout.addWidget(self.refresh_plot_btn)
-        controls_layout.addWidget(self.metric_combo)
-
-        self.refresh_plot_btn.clicked.connect(self.graph_thread.run)
-        self.metric_combo.currentIndexChanged.connect(self.graph_thread.index_changed)
-        self.thread.started.connect(self.graph_thread.run)
-        self.graph_thread.progress.connect(lambda: self.refresh_plot_btn.setEnabled(False))
-        self.graph_thread.progress.connect(lambda: self.metric_combo.setEnabled(False))
-        self.graph_thread.finished.connect(lambda: self.refresh_plot_btn.setEnabled(True))
-        self.graph_thread.finished.connect(lambda: self.metric_combo.setEnabled(True))
-
+        self.graph_thread.progress.connect(lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex()))
         self.thread.start()
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
 
-        # A small textual placeholder / description under the plot
+        self.timer = QTimer()
+        self.timer.setInterval(100)
+        self.timer.timeout.connect(self.graph_thread.run)
+        self.timer.start()
+        
         desc = QLabel("This analytics panel will show posture metrics over time. NOT FINAL IT'S FAR FROM FINAL.")
         desc.setFont(QFont("Press Start 2P", 9))
         desc.setWordWrap(True)
         layout.addWidget(desc)
-
-        # Wire up tab
         self.analytics_tab.setLayout(layout)
-           
 
     def init_settings_tab(self):
         pixel_font = QFont("Press Start 2P", 10)
