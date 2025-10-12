@@ -36,7 +36,7 @@ class GraphThread(QObject):
         self.file = None
         # basic file exception handling
         try:
-            self.file = open("posture_trend_log.csv", "rb")
+            self.file = open("posture_trend_log.csv", "ab")
         except FileNotFoundError:
             raise
         plt.style.use('bmh')
