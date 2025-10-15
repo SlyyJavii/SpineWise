@@ -10,6 +10,7 @@ import numpy as np
 import pygame
 import os
 import time
+from voice_config import voice_config
 from os.path import exists
 from urllib.request import urlretrieve
 from log import record_frame
@@ -49,8 +50,8 @@ if not exists(face_model):
         "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
         "face_landmarker.task")[0]
 
-#bundle = joblib.load("models/posture_xgb_v1.pkl")
-#classifier_model = bundle["model"]
+# bundle = joblib.load("models/posture_xgb_v1.pkl")
+# classifier_model = bundle["model"]
 
 last_log_time = time.time()
 
@@ -126,12 +127,12 @@ latest_features = None
 label_override = "good"
 
 
-
 def reset_calibration_buffer():
     global calibration_data
 
     keys = list(calibration_data.keys())
     calibration_data = {k: [] for k in keys}
+
 
 # Add function to create pose landmarker
 def get_pose_landmarker():
@@ -154,15 +155,17 @@ def get_face_landmarker():
         min_tracking_confidence=0.5)
     return mp.tasks.vision.FaceLandmarker.create_from_options(face_options)
 
+
 _last_log_time = 0
 
-def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confidence_score, interval = 3):
+
+def log_to_trend_file(timestamp, mode, facing, posture_status, head_tilt, confidence_score, interval=3):
     global _last_log_time
     current_time = time.time()
 
     if current_time - _last_log_time < interval:
-        return 
-    
+        return
+
     _last_log_time = current_time
 
     """Log posture data to the trend log file"""
@@ -333,29 +336,49 @@ def listen_for_speech():
         with mic as source:
             recognizer.adjust_for_ambient_noise(source)
             print("[SpeechRecognition] Listening...")
+            current_language = voice_config.get_language()
+            print(f"[SpeechRecognition] Using language: {current_language}")
+
             while True:
                 try:
                     print("[DEBUG] Waiting for audio...")
                     audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
                     print("[DEBUG] Audio captured")
-                    command = recognizer.recognize_google(audio).lower().strip()
+
+                    # Use configured language for recognition
+                    try:
+                        command = recognizer.recognize_google(audio, language=current_language).lower().strip()
+                    except sr.UnknownValueError:
+                        # Try with default language as fallback
+                        if current_language != "en-US":
+                            try:
+                                command = recognizer.recognize_google(audio, language="en-US").lower().strip()
+                                print(f"[SpeechRecognition] Fallback to English: {command}")
+                            except:
+                                continue
+                        else:
+                            continue
+
                     print(f"[SpeechRecognition] Heard: {command}")
-                    if "calibrate" in command:
+
+                    # Use voice_config to match commands
+                    matched_command = voice_config.match_command(command)
+
+                    if matched_command == "calibrate":
                         calibration_start_time = time.time()
                         is_calibrating = True
                         reset_calibration_buffer()
                         print("Calibration countdown started. Get ready...")
-                    elif "exit" in command:
+                    elif matched_command == "exit":
                         print("[SpeechRecognition] Escape command received. Exiting program...")
                         import os
                         os._exit(0)
-
                     elif is_manual_labeling:
-                        if "good" in command:
+                        if matched_command == "good_posture":
                             latest_voice_label = "good"
-                        elif "bad" in command:
+                        elif matched_command == "bad_posture":
                             latest_voice_label = "bad"
-                        elif "moderate" in command:
+                        elif matched_command == "moderate_posture":
                             latest_voice_label = "moderate"
 
                 except sr.WaitTimeoutError:
@@ -511,7 +534,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     else:
         # Fallback to pose-based ears if Face Mesh fails
         raw_head_tilt = left_ear.y - right_ear.y if left_ear.visibility > 0.5 and right_ear.visibility > 0.5 else 0
-        #print(f"[DEBUG] Fallback to pose ear landmarks")
+        # print(f"[DEBUG] Fallback to pose ear landmarks")
 
     head_tilt_difference = abs(raw_head_tilt)
 
@@ -627,9 +650,9 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             facial_percentage = (facial_distance - facial_avg) / facial_avg if facial_avg != 0 else 0
             torso_percentage = (torso_distance - torso_avg) / torso_avg if torso_avg != 0 else 0
             height_percentage = (
-                                            face_torso_height - face_clav_height_avg) / face_clav_height_avg if face_clav_height_avg != 0 else 0
+                                        face_torso_height - face_clav_height_avg) / face_clav_height_avg if face_clav_height_avg != 0 else 0
             shoulder_ear_percentage = (
-                                                  avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
+                                              avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
 
             # NEW: Looking down percentage using same pattern as other metrics
             looking_down_percentage = (nose_eye_distance - nose_eye_avg) / nose_eye_avg if nose_eye_avg != 0 else 0
@@ -658,10 +681,10 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             if normalized_head_tilt > 0.03:
                 tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
                 landmark_source = "Face Mesh cheeks" if (
-                            left_cheek is not None and right_cheek is not None) else "Pose ears"
-                #print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
-                      #f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
-                      #f"Source: {landmark_source}, Score: {head_tilt_score}/3")
+                        left_cheek is not None and right_cheek is not None) else "Pose ears"
+                # print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
+                # f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
+                # f"Source: {landmark_source}, Score: {head_tilt_score}/3")
 
             # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
             torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)
@@ -686,10 +709,10 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             combined_confidence = min(base_combined + clavicle_penalty, 7)
 
             # Debug output for clavicle tracking
-            #if posture_drop_score > 1:
-                #print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
-                      #f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
-                      #f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
+            # if posture_drop_score > 1:
+            # print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
+            # f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
+            # f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
 
             # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(combined_confidence, 7)
@@ -711,7 +734,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 "label": stable_posture if not is_manual_labeling else label_override
             }
             record_frame(features)
-            #print(f"[LOG] logged posture sample: {stable_posture}")
+            # print(f"[LOG] logged posture sample: {stable_posture}")
 
             global latest_features
             latest_features = features.copy()
@@ -762,7 +785,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
 
             shoulder_ear_avg = avg("shoulder_ear_distance")
             shoulder_ear_percentage = (
-                                                  avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
+                                              avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
 
             # Side-specific confidence scoring
             forward_head_score = scale_metric(shoulder_ear_percentage, 0.08, 0.25, 7)  # Use full 0-7 range
@@ -897,7 +920,7 @@ def run_standalone():
                         sample["label"] = "good"
                         record_frame(sample)
                         label_override = "good"
-                        print(f"[MANUAL] logged GOOD posture sample.")        
+                        print(f"[MANUAL] logged GOOD posture sample.")
                 elif is_manual_labeling and key == ord('b'):
                     if latest_features is not None:
                         sample = latest_features.copy()
@@ -950,21 +973,25 @@ def run_standalone():
 # Add a flag to prevent any background speech recognition in GUI mode
 _gui_mode = False
 
+
 def update_notification_volume(volume):
     global notification_volume
     notification_volume = volume
     beep.set_volume(volume / 100.0)  # Convert to pygame's 0.0-1.0 range
     print(f"Notification volume set to {volume}%")
 
+
 def update_beep_interval(interval):
     global beep_interval
     beep_interval = interval
     print(f"Beep interval set to {interval} seconds")
 
+
 def update_alert_duration(duration):
     global alert_duration
     alert_duration = duration
     print(f"Alert duration set to {duration} seconds")
+
 
 def set_gui_mode(enabled=True):
     """Set whether we're running in GUI mode to prevent conflicts"""
