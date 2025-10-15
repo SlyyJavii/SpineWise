@@ -1,18 +1,18 @@
 import os
 import numpy as np
 import pandas as pd
-import optuna
+from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import f1_score, classification_report, confusion_matrix
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import StratifiedGroupKFold
-import lightgbm as lgb
 from lightgbm import LGBMClassifier
 import joblib
 import warnings
 
-# config
+
+# config 
 #if youur csv is a different name then put the correct one 
-CSV = "posture_dataset.csv"
+CSV = "posture_dataset_merged_2.csv"
 
 METRICS = ["head_tilt","clavicle_drop_pct","face_lean","shoulder_ear_pct","torso_lean_pct","looking_down_pct"]
 STATS   = ["mean","std","min","max","range","slope","delta"]
@@ -111,50 +111,47 @@ base_clf = LGBMClassifier(
     verbose=-1
 )
 
-cost = [
-    [0, 2, 1],
-    [1, 0, 1],
-    [1, 2, 0]
-]
+param_dist = {
+    "learning_rate": np.geomspace(0.03, 0.12, 7),
+    "n_estimators": np.linspace(600, 2000, 10, dtype=int), # prev was 400, 1200, 9
+    "max_depth": [-1, 3, 4, 5, 6, 8],
+    "num_leaves": [31, 63, 127, 255],
+    "min_child_samples": [10, 20, 40, 80],
+    "min_child_weight": np.geomspace(1e-3, 1.0, 6),
+    "min_split_gain": np.linspace(0.0, 0.2, 5),
+    "reg_alpha": np.geomspace(1e-3, 0.3, 6),
+    "reg_lambda": np.geomspace(1e-3, 1.5, 6),
+    "colsample_bytree": [0.6, 0.7, 0.8, 0.9, 1.0], #added 0.6
+    "subsample": [0.6, 0.7, 0.8, 0.9, 1.0], #added 0.6
+    "subsample_freq": [0, 1, 2],
+}
 
-def objective(trial): # reduce n_trials below if taking too long
-    param = {
-        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.12, log=True),
-        "n_estimators": trial.suggest_int("n_estimators", 600, 2000, step=10),
-        "max_depth": trial.suggest_int("max_depth", -1, 8),
-        "num_leaves": trial.suggest_int("num_leaves", 31, 255, log=True),
-        "min_child_samples": trial.suggest_int("min_child_samples", 10, 80, log=True),
-        "min_child_weight": trial.suggest_float("min_child_weight", 1e-3, 1.0),
-        "min_split_gain": trial.suggest_float("min_split_gain", 0.0, 0.2),
-        "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 0.3),
-        "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 1.5),
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-        "subsample_freq": trial.suggest_int("subsample_freq", 0, 2)
-    }
+search = RandomizedSearchCV(
+    estimator=base_clf,
+    param_distributions=param_dist,
+    n_iter=120, #previous was 60
+    scoring="f1_macro",
+    cv=cv_splits,
+    n_jobs=-1,
+    random_state=42,
+    refit=True,
+    verbose=1
+)
 
-    scores = []
-    for tr, va in cv_splits:
-        model = LGBMClassifier(**param, verbose=-1, objective="multiclass", num_class=3)
-        model.fit(X.iloc[tr], y[tr], eval_set=[(X.iloc[va], y[va])], callbacks=[lgb.early_stopping(stopping_rounds=100)])
-        probs = model.predict_proba(X.iloc[va])
-        yhat_val = np.argmin(probs @ cost, axis=1)
-        macro_f1 = f1_score(y[va], yhat_val, average="macro")
+# fit search
+warnings.filterwarnings("ignore", category=UserWarning)
+search.fit(X, y)
+best_clf = search.best_estimator_
+print("\n[SEARCH] Best params:")
+print(search.best_params_)
 
-        scores.append(macro_f1)
-
-    return np.mean(scores)
-study = optuna.create_study(direction='maximize')
-study.optimize(objective, n_trials=50)
-params = study.best_params
-best_clf = LGBMClassifier(**params, objective="multiclass", num_class=3)
 
 # honest CV evaluation with the best params
 fold_f1 = []
 per_class_f1 = []
 
 for i, (train_idx, test_idx) in enumerate(cv_splits, 1):
-    clf = LGBMClassifier(**params, objective="multiclass", num_class=3)
+    clf = LGBMClassifier(**best_clf.get_params())
     clf.fit(X.iloc[train_idx], y[train_idx])
     y_pred = clf.predict(X.iloc[test_idx])
 
@@ -179,6 +176,9 @@ print("\n================ SUMMARY ================")
 print(f"CV macro-F1 (classifier): {np.mean(fold_f1):.3f} ± {np.std(fold_f1):.3f}")
 pcf = np.array(per_class_f1)
 print(f"Per-class F1 avg: bad={pcf[:,0].mean():.3f}, moderate={pcf[:,1].mean():.3f}, good={pcf[:,2].mean():.3f}")
+
+
+import lightgbm as lgb 
 
 # fit best on full data and save with early stopping
 best_clf.fit(

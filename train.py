@@ -51,7 +51,7 @@ def objective(trial): # reduce n_trials below if taking too long
 
     scores = []
     for tr, va in splits:
-        model = LGBMClassifier(**param, verbose=-1, objective="multiclass", num_class=3)
+        model = LGBMClassifier(**param, verbose=-1)
         model.fit(X.iloc[tr], y[tr], eval_set=[(X.iloc[va], y[va])], callbacks=[early_stopping(stopping_rounds=100)])
         pred = model.predict(X.iloc[va])
         rmse = mean_squared_error(y[va], pred)
@@ -62,12 +62,12 @@ study = optuna.create_study(direction='minimize')
 study.optimize(objective, n_trials=50)
 
 params = study.best_params
-final_cla = LGBMClassifier(**params, verbose=-1, objective="multiclass", num_class=3)
+final_cla = LGBMClassifier(**params)
 final_cla.fit(X, y)
 
 cla_f1 = []
 for tr_idx, va_idx in splits:
-    cla = LGBMClassifier(**params, verbose=-1, objective="multiclass", num_class=3)
+    cla = LGBMClassifier(**params)
     cla.fit(X.iloc[tr_idx], y[tr_idx])
     yhat_val = cla.predict(X.iloc[va_idx])
     cla_f1.append(f1_score(y[va_idx], yhat_val, average="macro"))
