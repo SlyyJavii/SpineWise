@@ -1,0 +1,6 @@
+venv*/
+data/
+posture_images/
+*.task
+spinewise-clean/
+*.zip
