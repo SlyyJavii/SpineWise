@@ -1,6 +1,15 @@
-import csv, os, uuid, json, queue, threading, time, numpy as np
+import csv, os, uuid, json, queue, threading, time, joblib, numpy as np
 
 import pandas as pd
+from scipy.special import softmax
+
+bundle = joblib.load("models/posture_lgbm_classifier.pkl")
+classifier_model = bundle["model"]
+classifier_calibrator = bundle["calibrator"]
+classifier_decision_params = bundle["decision_params"]
+classifier_features = bundle["feature_names"]
+classifier_id_map = bundle["id_to_label"]
+
 
 STATE_PATH = ".spinewise_state.json"
 METRICS = ["head_tilt", "clavicle_drop_pct", "face_lean", "shoulder_ear_pct", "torso_lean_pct", "looking_down_pct"]
@@ -15,6 +24,33 @@ window_queue = queue.Queue(maxsize=WINDOW_SIZE)
 window = []
 
 io_tasks = set()
+
+def apply_decision_layer(decision_params, logits, raw_score=False):
+    eps = decision_params["eps"]
+    alpha = decision_params["alpha"]
+    beta = decision_params["beta"]
+    tau = decision_params["tau"]
+    bias_mod = decision_params["bias_mod"]
+
+    new_logits = logits / tau
+    new_logits[:, 1] += bias_mod
+    proba = softmax(new_logits, axis=1)
+
+    C = [
+        [0.0, 1 + alpha, 1.0],
+        [beta, 0.0, beta],
+        [1.0, 1 + alpha, 0.0]
+    ]
+
+    expected = proba @ np.array(C).T
+
+    if raw_score:
+        return expected
+
+    y_argmin = expected.argmin(1)
+
+    close_to_top = (proba.max(1) - proba[:, 1] <= eps)
+    return np.where(close_to_top, 1, y_argmin)
 
 def retrieve_user_id():
     if os.path.exists(STATE_PATH):
@@ -81,6 +117,12 @@ def log_posture_windows(filename="posture_dataset.csv"):
                 features["t_end"] = timestamps.iloc[-1]
                 features["label"] = windows[w]["label"].mode().iloc[0]
                 rows.append(features)
+
+                trimmed_features = pd.DataFrame([features])[classifier_features]
+                logits = classifier_model.predict(trimmed_features, raw_score=True)
+                yhat = np.argmax(classifier_calibrator.predict_proba(logits), axis=1)
+
+                print(f"[DEBUG] classifier result: {classifier_id_map[yhat[0]]}")
 
                 if new_file.tell() == 0:
                     writer.writerow(features.keys())

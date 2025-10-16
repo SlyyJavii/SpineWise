@@ -15,7 +15,6 @@ from os.path import exists
 from urllib.request import urlretrieve
 from log import record_frame
 from posture_image_logger import save_posture_image, initialize_folders
-import joblib
 
 # Globals for settings hooks in relation to pygame.
 notification_volume = 50  # Default volume (0-100)
@@ -49,9 +48,6 @@ if not exists(face_model):
     face_model = urlretrieve(
         "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
         "face_landmarker.task")[0]
-
-# bundle = joblib.load("models/posture_xgb_v1.pkl")
-# classifier_model = bundle["model"]
 
 last_log_time = time.time()
 
