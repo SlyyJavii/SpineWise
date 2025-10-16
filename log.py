@@ -120,7 +120,8 @@ def log_posture_windows(filename="posture_dataset.csv"):
 
                 trimmed_features = pd.DataFrame([features])[classifier_features]
                 logits = classifier_model.predict(trimmed_features, raw_score=True)
-                yhat = np.argmax(classifier_calibrator.predict_proba(logits), axis=1)
+                cal_logits = classifier_calibrator.decision_function(logits)
+                yhat = apply_decision_layer(classifier_decision_params, cal_logits)
 
                 print(f"[DEBUG] classifier result: {classifier_id_map[yhat[0]]}")
 
