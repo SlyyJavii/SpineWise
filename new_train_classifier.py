@@ -5,7 +5,7 @@ import optuna
 from scipy.special import softmax
 from sklearn.metrics import f1_score, classification_report, confusion_matrix
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 import lightgbm as lgb
 from lightgbm import LGBMClassifier, early_stopping
 import joblib
@@ -28,9 +28,9 @@ NON_FEATURES = ["user_id","session_id","t_start","t_end","label"]
 LABEL_TO_ID = {"bad": 0, "moderate": 1, "good": 2}
 ID_TO_LABEL = {v: k for k, v in LABEL_TO_ID.items()}
 
-
 # load + validate
 df = pd.read_csv(CSV)
+print(df.value_counts(subset="user_id"))
 
 # create any missing non-features columns for safety
 for c in NON_FEATURES:
@@ -113,20 +113,41 @@ def apply_decision_layer(decision_params, logits, raw_score=False):
 
 def evaluation_contract(lgbm_params, decision_params, callback=None):
     scores = []
+    oof_logits = []
+    oof_labels = []
+    best_iters = []
+
+    trial_calibrator = LogisticRegression(
+        solver="lbfgs",
+        penalty="l2",
+        C=1.0,
+        max_iter=1000,
+        random_state=42
+    )
 
     for tr, va in cv_splits:
         model = LGBMClassifier(**lgbm_params)
         model.fit(X.iloc[tr], y[tr], eval_set=[(X.iloc[va], y[va])], eval_metric="multi_logloss", callbacks=[early_stopping(stopping_rounds=100)])
 
-        logits = model.predict(X.iloc[va], raw_score=True)
-        yhat_val = apply_decision_layer(decision_params, logits)
+        raw_logits = model.predict(X.iloc[va], raw_score=True)
 
-        if callback: # runs once per fold
-            callback(y[va], logits, yhat_val, model.best_iteration_)
+        oof_logits.extend(raw_logits)
+        oof_labels.extend(y[va])
+        best_iters.append(model.best_iteration_)
 
-        macro_f1 = f1_score(y[va], yhat_val, average="macro")
-        scores.append(macro_f1)
-    return np.mean(scores)
+    X_all = np.asarray(oof_logits)
+    y_all = np.asarray(oof_labels)
+
+    X_calib_train, X_calib_test, Y_calib_train, Y_calib_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42, stratify=oof_labels)
+    trial_calibrator.fit(X_calib_train, Y_calib_train)
+
+    cal_logits = trial_calibrator.decision_function(X_calib_test)
+    y_hat = apply_decision_layer(decision_params, cal_logits)
+
+    if callback is not None:
+        callback(oof_logits, oof_labels, best_iters)
+
+    return f1_score(Y_calib_test, y_hat, average="macro")
 
 def objective(trial):
     lgbm_params = {
@@ -152,32 +173,28 @@ def objective(trial):
     }
     decision_params = {
         "eps" : trial.suggest_float("eps", 0.0, 0.02),
-        "alpha" : trial.suggest_float("alpha", 0.3, 1.2),
-        "beta" : trial.suggest_float("beta", 0.7, 1.5),
+        "alpha" : trial.suggest_float("alpha", 0.3, 1.4),
+        "beta" : trial.suggest_float("beta", 0.7, 1.7),
         "tau" : trial.suggest_float("tau", 0.9, 1),  # temperature
         "bias_mod" : trial.suggest_float("bias_mod", 0, 0.03)  # class-1 logit bias
     }
     return evaluation_contract(lgbm_params, decision_params)
 
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=40)
+study.optimize(objective, n_trials=50)
 
-best_lgbm_params = study.best_params
+best_lgbm_params = dict(study.best_params)
 best_decision_params = {key: best_lgbm_params.pop(key) for key in ("eps", "alpha", "beta", "tau", "bias_mod")}
 
-out_of_fold = {
-    "logits": [],
-    "y_vals": [],
-}
-best_iterations = []
-
 # honest CV evaluation with the best params
-def summary(y_va, logits, yhat_val, best_iteration):
-    out_of_fold["logits"].extend(logits)
-    out_of_fold["y_vals"].extend(y_va)
-    best_iterations.append(best_iteration)
+out_of_fold = {}
 
-new_macro_f1 = evaluation_contract(best_lgbm_params, best_decision_params, callback=summary)
+def final_cv(final_logits, y_vals, best_iters):
+    out_of_fold["logits"] = final_logits
+    out_of_fold["y_vals"] = y_vals
+    best_lgbm_params["n_estimators"] = int(np.round(np.mean(best_iters)))
+
+new_macro_f1 = evaluation_contract(best_lgbm_params, best_decision_params, callback=final_cv)
 
 calibrator = LogisticRegression(
     solver="lbfgs",
@@ -190,25 +207,25 @@ calibrator = LogisticRegression(
 calibrator.fit(out_of_fold["logits"],
                out_of_fold["y_vals"])
 
-best_lgbm_params["n_estimators"] = int(np.round(np.mean(best_iterations)))
 best_clf = LGBMClassifier(**best_lgbm_params)
 best_clf.fit(X, y)
 
 os.makedirs("models", exist_ok=True)
 bundle_path = "models/posture_lgbm_classifier.pkl"
 joblib.dump(
-    {"model": best_clf, "feature_names": FEATURES, "label_to_id": LABEL_TO_ID, "id_to_label": ID_TO_LABEL, "calibrator": calibrator, "decision_params": best_decision_params},
+    {"model": best_clf, "feature_names": FEATURES, "label_to_id": LABEL_TO_ID, "id_to_label": ID_TO_LABEL, "calibrator": calibrator},
     bundle_path
 )
 
-print(best_lgbm_params, best_decision_params)
+print(best_lgbm_params)
 
 # convert lists to arrays
 y_true = np.array(out_of_fold["y_vals"])
 logits = np.array(out_of_fold["logits"])
 y_pred_raw = np.argmax(logits, axis=1)
 
-y_pred_cal = calibrator.predict(logits)
+cal_logits = calibrator.decision_function(logits)
+y_pred_cal = apply_decision_layer(best_decision_params, cal_logits)
 
 # --- uncalibrated performance
 raw_report = classification_report(
