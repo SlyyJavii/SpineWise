@@ -54,24 +54,24 @@ users = df["user_id"].astype(str).fillna("NA")
 n_users = users.nunique()
 
 
-# pick folds safely (session grouped) eventually user grouped
+# pick folds safely 
 requested_folds = 5
 sessions = df["session_id"].astype(str).fillna("NA")
 n_sessions = sessions.nunique()
 
 # never exceed #sessions
-n_splits = min(requested_folds, max(2, n_sessions))  # at least 2, at most n_sessions
-# if some sessions are tiny/class-imbalanced SGKfold may fail to stratify at high n_splits so we back off gradually if needed
+n_splits = min(requested_folds, max(2, n_users))  # at least 2, at most n_users
+# if some users are tiny/class-imbalanced SGKfold may fail to stratify at high n_splits so we back off gradually if needed
 while True:
     try:
         cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        cv_splits = list(cv.split(X, y, groups=sessions))
-        print(f"[CV] Using StratifiedGroupKFold grouped by session_id with n_splits={n_splits} over {n_sessions} sessions")
+        cv_splits = list(cv.split(X, y, groups=users))
+        print(f"[CV] Using StratifiedGroupKFold grouped by user_id with n_splits={n_splits} over {n_users} users")
         break
     except ValueError as e:
         n_splits -= 1
         if n_splits < 2:
-            raise RuntimeError(f"Could not create valid session-grouped folds: {e}")
+            raise RuntimeError(f"Could not create valid user-grouped folds: {e}")
 
 # guard against any empty folds (paranoia)
 valid_splits = []
@@ -81,7 +81,7 @@ for tr, te in cv_splits:
         continue
     valid_splits.append((tr, te))
 if not valid_splits:
-    raise RuntimeError("All folds were empty; check session_id and class balance.")
+    raise RuntimeError("All folds were empty; check user_id and class balance.")
 cv_splits = valid_splits
 
 def apply_decision_layer(decision_params, logits, raw_score=False):
