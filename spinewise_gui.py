@@ -311,8 +311,26 @@ class App(QMainWindow):
         self.init_live_tab()
         self.init_analytics_tab()
         self.init_settings_tab()
+
+        # default engine mode
+        # Sets GUI dropdown and backend mode to rule based at startup
+        if hasattr(self, "engine_combo"):
+            self.engine_combo.setCurrentIndex(0)  
+            backend.set_detection_mode("rules")
         self.init_recommendations_tab()
         self.speech_thread.start()
+
+        #settings handler for engine switch
+    def _on_engine_changed(self, idx):
+        mode = self.engine_combo.itemData(idx)
+        try:
+            backend.set_detection_mode(mode)
+            if hasattr(self, "stats_display"):
+                self.stats_display.setText(f"Detection engine set to: {self.engine_combo.currentText()}")
+        except Exception as e:
+            if hasattr(self, "stats_display"):
+                self.stats_display.setText(f"Failed to switch engine: {e}")
+
 
     # recommendations tab
     def _on_refresh_products_from_csv(self):
@@ -482,6 +500,25 @@ class App(QMainWindow):
         landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed"); landmark_info.setStyleSheet("color: #5A6B84;")
         v_layout.addRow("", landmark_info)
         visual_group.setLayout(v_layout); layout.addWidget(visual_group)
+
+        #detection engine group
+        engine_group = QGroupBox("Detection Engine")
+        e_layout = QFormLayout()
+
+        from PyQt5.QtWidgets import QComboBox
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItem("Rule-based (default)", "rules")
+        self.engine_combo.addItem("Machine Learning (beta)", "ml")
+        self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        e_layout.addRow(QLabel("Engine:"), self.engine_combo)
+
+        engine_help = QLabel("Switch between the handcrafted logic and the trained ML model.")
+        engine_help.setStyleSheet("color: #5A6B84;")
+        e_layout.addRow("", engine_help)
+
+        engine_group.setLayout(e_layout)
+        layout.addWidget(engine_group)
+        #
 
         notif_group = QGroupBox("Notification Settings"); n_layout = QFormLayout()
         vol_row = QHBoxLayout()
