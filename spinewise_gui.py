@@ -34,13 +34,33 @@ class GraphThread(QObject):
     def __init__(self):
         super().__init__()
         self.file = None
-        # basic file exception handling
+        self.currentTime = QTime(0, 0, 0, 0)
+        self.frequency = {}
+        self.countList = []
+        self.prev = ""
+        self.substring = ""
+        # basic file exception handling for trend_log.csv file
         try:
             self.file = open("posture_trend_log.csv", "rb")
         except FileNotFoundError:
             self.file = open("posture_trend_log.csv", "w")
             self.file.close()
             raise
+        
+        # additional file exception handling for stats.json file
+        try:
+            with open ("stats.json", "r") as json_file:
+                data = json.load(json_file)
+                self.currentTime = QTime.fromString(data['time'], "hh:mm:ss")
+                self.frequency = data['frequency']
+        except FileNotFoundError: 
+            with open ("stats.json", "w") as json_file:
+                json.dump({"day": datetime.datetime.now().day, "time": "00:00:00", "frequency": {}}, json_file)
+            if len(self.frequency) == 0 and os.path.getsize("posture_trend_log.csv") > 0:
+                with open ("posture_trend_log.csv", "r") as temp:
+                    key = (next(iter(temp)))[0:10]
+                    self.frequency.update({key: ""})
+
         plt.style.use('bmh')
         self.figure = Figure(figsize=(8, 4))
         self.canvas = FigureCanvas(self.figure)
@@ -66,9 +86,15 @@ class GraphThread(QObject):
                 for row in csv.reader(reader(self.file)):
                     if (len(row) != 6 or not (row[-1].isdigit())):
                         return
+                    self.substring = (row[0])[:10]
                     (self.ydata[0]).append(int(row[-1]))
                     (self.ydata[1]).append(float(row[4]))
                     (self.xdata).append(self.xdata[-1] + interval)
+                    if (self.prev != "" and self.substring != self.prev):
+                        self.finished.emit()
+                        self.countList.clear()
+                    (self.countList).append(row[3])
+                    self.prev = self.substring
                     # Clear figure and plot
                     self.plot()
             except Exception as e:
@@ -93,6 +119,17 @@ class GraphThread(QObject):
         self.figure.tight_layout()
         plt.pause(0.25)
         self.canvas.draw()
+    
+    # responsible for collecting mode of posture score associated with each day
+    def most_frequent(self):
+        if len(self.countList) > 0:
+            self.frequency.update({self.prev: max(set(self.countList), key = self.countList.count)})
+        data = {}
+        with open("stats.json", "r") as json_file:
+            data = json.load(json_file)
+        data['frequency'] = self.frequency
+        with open("stats.json", "w") as json_file:
+            json.dump(data, json_file)
 
 # speech thread
 class SpeechRecognitionThread(QThread):
@@ -288,14 +325,6 @@ class App(QMainWindow):
         main_layout = QVBoxLayout(); main_layout.setAlignment(Qt.AlignTop); main_layout.setContentsMargins(16,16,16,16); main_layout.addWidget(self.tab_widget)
         central = QWidget(); central.setLayout(main_layout); self.setCentralWidget(central)
 
-        self.currentTime = QTime(0, 0, 0, 0)
-        try:
-            with open ("stats.json", "r") as json_file:
-                self.currentTime = QTime.fromString( ((json.load(json_file))['time']), "hh:mm:ss")
-        except:
-            with open ("stats.json", "w") as json_file:
-                json.dump({"day": datetime.datetime.now().day, "time": "00:00:00"}, json_file)
-
         menu = self.menuBar(); view_menu = menu.addMenu("View")
         rec_action = QAction("Recommendations", self); rec_action.triggered.connect(lambda: self.tab_widget.setCurrentWidget(self.recommendations_tab)); view_menu.addAction(rec_action)
 
@@ -480,6 +509,7 @@ class App(QMainWindow):
         self.graph_thread.moveToThread(self.QGraphThread)
         layout.addWidget(self.graph_thread.canvas)
         self.graph_thread.progress.connect(lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex()))
+        self.graph_thread.finished.connect(self.graph_thread.most_frequent)
         self.QGraphThread.start()
 
         self.timer = QTimer()
@@ -664,8 +694,8 @@ class App(QMainWindow):
         outer = QVBoxLayout(); outer.addWidget(settings_scroll); self.settings_tab.setLayout(outer)
     
     def update_stopwatch(self):
-        self.currentTime = self.currentTime.addMSecs(self.timer.interval())
-        self.firstTop.setText(self.currentTime.toString("hh:mm:ss"))
+        self.graph_thread.currentTime = self.graph_thread.currentTime.addMSecs(self.timer.interval())
+        self.firstTop.setText(self.graph_thread.currentTime.toString("hh:mm:ss"))
 
     # recs logic
     def _on_generate_recommendations(self):
@@ -1195,7 +1225,7 @@ class App(QMainWindow):
         with open("stats.json", "r") as json_file:
             data = json.load(json_file)
         if data['day'] == datetime.datetime.now().day:
-            timestamp = self.currentTime.toString("hh:mm:ss")
+            timestamp = self.graph_thread.currentTime.toString("hh:mm:ss")
         data['time'] = timestamp
         with open("stats.json", "w") as json_file:
             json.dump(data, json_file)
