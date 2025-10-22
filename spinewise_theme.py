@@ -64,13 +64,13 @@ QLabel {{ color: {COLORS['text_primary']}; }}
 QGroupBox {{
     border: 1px solid {COLORS['border']};
     border-radius: 8px;
-    margin-top: 12px;
+    margin-top: 18px;
     background-color: {COLORS['bg_white']};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     left: 10px;
-    padding: 2px 4px;
+    padding: 4px 6px;
     color: {COLORS['brand']};
     font-weight: 600;
 }}
@@ -78,11 +78,14 @@ QPushButton {{
     background: {COLORS['brand']};
     color: white;
     border: none;
-    border-radius: 8px;
-    padding: 8px 14px;
+    border-radius: 10px;
+    padding: 10px 16px;
     font-weight: 600;
+    cursor: pointer;
+    transition: 0.3s;
 }}
-QPushButton:hover {{ background: {COLORS['brand_hover']}; }}
+
+QPushButton:hover {{ background: {COLORS['brand_hover']}; padding}}
 QPushButton:disabled {{ background: #A9C3E6; color: #F0F6FF; }}
 QSlider::groove:horizontal {{ height: 6px; background: {COLORS['border']}; border-radius: 3px; }}
 QSlider::handle:horizontal {{
@@ -97,14 +100,16 @@ QTabWidget::pane {{
 QTabBar::tab {{
     background: #EAF2FF;
     color: {COLORS['text_primary']};
-    padding: 8px 16px;
-    margin: 6px 8px;
+    padding: 6px 12px;
+    margin: 4px 6px;
     border-radius: 8px;
-    min-width: 160px;
-    font-weight: 600;
+    min-width: 150px;
+    font-weight: 700;
+    font-size: 13px;
+    transition: 0.3s;
 }}
-QTabBar::tab:selected {{ background: #D4E6FF; }}
-QTabBar::tab:hover {{ background: #DDEBFF; }}
+QTabBar::tab:selected {{ background: #D4E6FF; border: 1px solid {COLORS['brand']}; }}
+QTabBar::tab:hover {{ background: #DDEBFF; border: 1px solid {COLORS['brand']}; transition: 0.3s; }}
 QTableWidget {{
     background: {COLORS['bg_white']};
     border: 1px solid {COLORS['border']};
@@ -189,14 +194,17 @@ QLabel {{
 }}
 """
 
-BTN_SUCCESS_QSS = f"QPushButton {{ background: {COLORS['accent_success']}; }} QPushButton:hover {{ background: {COLORS['accent_success_hover']}; }}"
+BTN_SUCCESS_QSS = f"QPushButton {{ background: {COLORS['accent_success']}; }} QPushButton:hover {{ background: {COLORS['accent_success_hover']}; transition: 0.3s; }}"
 
-POPUP_FRAME_QSS = f"QFrame {{ background-color: {COLORS['bg_white']}; border: 1px solid {COLORS['border']}; border-radius: 12px; }}"
+POPUP_FRAME_QSS = f"QFrame {{ background-color: {COLORS['bg_base']}; border: 1px solid {COLORS['border']}; border-radius: 12px; }}"
 
 DOT_QSS = f"""
 QRadioButton::indicator {{ width: 10px; height: 10px; border-radius: 5px; background-color: {COLORS['dot_off']}; }}
 QRadioButton::indicator:checked {{ background-color: {COLORS['brand']}; }}
 """
+
+BTN_DANGER_QSS = "QPushButton { background: #E55353; color: white; } QPushButton:hover { background: #C94444; }"
+BTN_PRIMARY_QSS = "QPushButton { background: #0B5CAD; color: white; } QPushButton:hover { background: #0D6EDB; }"
 
 def posture_style(kind: str) -> str:
     if kind == "good":
@@ -207,8 +215,6 @@ def posture_style(kind: str) -> str:
         return f"""QLabel {{ background-color: {COLORS['bad_bg']}; border: 1px solid {COLORS['bad_border']}; border-radius: 10px; padding: 12px; color: {COLORS['bad_text']}; font-weight: 600; }}"""
     if kind == "monitor":
         return f"""QLabel {{ background-color: {COLORS['monitor_bg']}; border: 1px solid {COLORS['monitor_border']}; border-radius: 10px; padding: 12px; color: {COLORS['text_primary']}; font-weight: 600; }}"""
-    
-    # stopped/none
     return f"""QLabel {{ background-color: {COLORS['stopped_bg']}; border: 1px solid {COLORS['stopped_border']}; border-radius: 10px; padding: 12px; color: {COLORS['stopped_text']}; font-weight: 600; }}"""
 
 def voice_status_style(mode: str) -> str:
