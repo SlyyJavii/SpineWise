@@ -5,9 +5,9 @@ from scipy.special import softmax
 
 bundle = joblib.load("models/posture_lgbm_classifier.pkl")
 classifier_model = bundle["model"]
-classifier_calibrator = bundle["calibrator"]
-classifier_decision_params = bundle["decision_params"]
-classifier_features = bundle["feature_names"]
+classifier_calibrator = bundle.get("calibrator")
+classifier_decision_params = bundle.get("decision_params")
+classifier_features = bundle.get("feature_names")
 classifier_id_map = bundle["id_to_label"]
 
 
