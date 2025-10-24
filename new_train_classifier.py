@@ -213,7 +213,7 @@ best_clf.fit(X, y)
 os.makedirs("models", exist_ok=True)
 bundle_path = "models/posture_lgbm_classifier.pkl"
 joblib.dump(
-    {"model": best_clf, "feature_names": FEATURES, "label_to_id": LABEL_TO_ID, "id_to_label": ID_TO_LABEL, "calibrator": calibrator},
+    {"model": best_clf, "feature_names": FEATURES, "label_to_id": LABEL_TO_ID, "id_to_label": ID_TO_LABEL, "calibrator": calibrator, "decision_params": best_decision_params},
     bundle_path
 )
 

@@ -17,6 +17,8 @@ from log import record_frame
 from posture_image_logger import save_posture_image, initialize_folders
 from scipy.special import softmax as _softmax
 import joblib
+import pandas as pd
+
 
 
 # Globals for settings hooks in relation to pygame
@@ -89,22 +91,37 @@ def ml_predict_label_from_features(features_dict) -> str:
     _load_ml_once()
     if not _ML["loaded"] or _ML["model"] is None:
         return features_dict.get("label", "good")  # fallback to current result
+    
 
     # Model was trained on many engineered columns (means/std/etc)
     # for live usage we approximate that by aggregating a few seconds of per-frame data (2 s smoothing window)
     # this provides a pragmatic bridge between instantaneous inputs and the model’s expected short-term statistics
     try:
         #prefer feature_names if present in bundle 
-        feature_names = _ML.get("feature_names")
-        if feature_names is None:
-            #try to use keys present order is not guaranteed—adapt as needed
-            feature_names = list(features_dict.keys())
-
-        xrow = np.array([[features_dict.get(k, 0.0) for k in feature_names]], dtype=float)
-
         model = _ML["model"]
-        calibrator = _ML["calibrator"]
-        decision_params = _ML["decision_params"]
+        calibrator = _ML.get("calibrator")
+        decision_params = _ML.get("decision_params")
+        feature_names = _ML.get("feature_names")
+
+        def to_float(x):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return 0.0
+            
+        if feature_names:
+            #try to use keys present order is not guaranteed—adapt as needed
+            row_dict = {fname: to_float(features_dict.get(fname, 0.0)) for fname in feature_names}
+            xrow = pd.DataFrame([row_dict], columns=feature_names)
+        else:
+            numeric_vals = [to_float(v) for v in features_dict.values() if isinstance(v, (int, float, np.floating))]
+            n_expected = getattr(model, "n_features_in_", len(numeric_vals))
+
+            if len(numeric_vals) < n_expected:
+                numeric_vals += [0.0] * (n_expected - len(numeric_vals))
+            elif len(numeric_vals) > n_expected:
+                numeric_vals = numeric_vals[:n_expected]
+            xrow = pd.DataFrame([numeric_vals])
 
         if calibrator is not None and decision_params is not None:
             # Use raw_score -> calibrator -> decision layer
@@ -175,8 +192,8 @@ calibration_data = {
     "face_mesh_rotation": [],  # Face Mesh head rotation baseline
     "face_mesh_lean": [],  # Face Mesh forward lean baseline
     "face_mesh_distance": [],  # Face Mesh distance baseline
-    "raw_eye_tilt_samples": [],  # NEW: Store raw tilt samples to detect natural asymmetry
-    "nose_eye_distances": []  # NEW: Store nose-to-eye baseline for looking down detection
+    "raw_eye_tilt_samples": [],  # Store raw tilt samples to detect natural asymmetry
+    "nose_eye_distances": []  # Store nose-to-eye baseline for looking down detection
 }
 countdown_duration = 3
 hold_duration = 5
@@ -325,7 +342,7 @@ def update_posture_stability(confidence_score, max_score=7):
 
     # Track transition timing
     if candidate_posture != current_stable_posture:
-        # New candidate posture detected
+        # candidate posture detected
         if candidate_posture not in posture_transition_time:
             posture_transition_time[candidate_posture] = current_time
 
@@ -628,7 +645,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
     face_tilt, face_rotation, face_lean, face_distance, tilt_direction, nose_eye_distance, left_cheek, right_cheek = calculate_head_metrics_from_face_mesh(
         face_landmarks)
 
-    # NEW: Use Face Mesh cheeks as ear replacements for better accuracy
+    # Use Face Mesh cheeks as ear replacements for better accuracy
     if left_cheek is not None and right_cheek is not None:
         # Use Face Mesh cheek landmarks instead of pose ear landmarks
         left_ear = left_cheek
@@ -685,7 +702,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             calibration_data["face_mesh_lean"].append(face_lean)
             calibration_data["face_mesh_distance"].append(face_distance)
 
-            # NEW: Calibrate nose-eye distance baseline for looking down detection
+            # Calibrate nose-eye distance baseline for looking down detection
             calibration_data["nose_eye_distances"].append(nose_eye_distance)
 
             # Store raw tilt samples using Face Mesh cheeks when available
@@ -729,7 +746,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
                 "face_mesh_distance_baseline": avg("face_mesh_distance"),
                 # Natural tilt baseline for symmetric detection
                 "natural_tilt_baseline": natural_tilt_baseline,
-                # NEW: Nose-eye distance baseline for looking down detection
+                # Nose-eye distance baseline for looking down detection
                 "nose_eye_baseline": avg("nose_eye_distances")
             }
             # Set calibration end time for grace period
@@ -757,7 +774,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             shoulder_ear_percentage = (
                                               avg_shoulder_ear - shoulder_ear_avg) / shoulder_ear_avg if shoulder_ear_avg != 0 else 0
 
-            # NEW: Looking down percentage using same pattern as other metrics
+            # Looking down percentage using same pattern as other metrics
             looking_down_percentage = (nose_eye_distance - nose_eye_avg) / nose_eye_avg if nose_eye_avg != 0 else 0
 
             # ENHANCED: More responsive clavicle Y-drop detection
@@ -775,7 +792,7 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             head_tilt_score = scale_metric(normalized_head_tilt, 0.02, 0.08,
                                            3)  # More sensitive with proper normalization
 
-            # NEW: Looking down score using same scale_metric function
+            # Looking down score using same scale_metric function
             looking_down_score = scale_metric(looking_down_percentage, 0.40, 0.60, 4)  # 15%-40% change triggers penalty
 
             head_confidence_score = min(head_forward_score + head_tilt_score + looking_down_score, 7)
