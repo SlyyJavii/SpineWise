@@ -528,30 +528,30 @@ class App(QMainWindow):
         self.live_tab.layout().addWidget(live_wrapper)
 
     # analytics tab
-    def init_analytics_tab(self):
-        # Main container layout
+   def init_analytics_tab(self):
         layout = QVBoxLayout()
         title = QLabel("Posture Analytics")
         title.setFont(QFont("Press Start 2P", 14))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        self.thread = QThread()
         self.graph_thread = GraphThread()
-        self.graph_thread.moveToThread(self.thread)
         layout.addWidget(self.graph_thread.canvas)
-        self.graph_thread.progress.connect(lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex()))
-        self.thread.start()
 
-        self.timer = QTimer()
-        self.timer.setInterval(100)
-        self.timer.timeout.connect(self.graph_thread.run)
-        self.timer.start()
+        self.graph_thread.progress.connect(
+            lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex())
+        )
+        self.graph_thread.update_plot.connect(self.graph_thread.plot_on_main_thread)
 
-        desc = QLabel("This analytics panel will show posture metrics over time. NOT FINAL IT'S FAR FROM FINAL.")
+        self.graph_thread.start()
+
+        self.tab_widget.currentChanged.connect(self.graph_thread.set_tab)
+
+        desc = QLabel("This analytics panel will show posture metrics over time.")
         desc.setFont(QFont("Press Start 2P", 9))
         desc.setWordWrap(True)
         layout.addWidget(desc)
+
         self.analytics_tab.setLayout(layout)
 
     # settings tab
