@@ -1,4 +1,4 @@
-import os, queue, cv2, csv, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, speech_recognition as sr
+import os, queue, cv2, csv, json, datetime, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, speech_recognition as sr
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame,
     QVBoxLayout, QWidget, QTabWidget, QMainWindow, QFileDialog, QTextEdit, QDoubleSpinBox,
@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPainter, QColor
 from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve, QThread, pyqtSignal, QEvent, QTimer, \
-    QObject
+    QObject, QTime
 
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker, draw_landmarks,
@@ -21,7 +21,6 @@ from spinewise_theme import (
     BTN_SUCCESS_QSS, POPUP_FRAME_QSS, DOT_QSS, posture_style, voice_status_style
 )
 from voice_config import voice_config
-from poll import reader
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -41,9 +40,13 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
     def __init__(self):
         super().__init__()
         self.file_path = "posture_trend_log.csv"
-        self._is_running = False
         self.tab_active = False
+        self.currentTime = QTime(0, 0, 0, 0)
         self.file_position = 0
+        self.frequency = {}
+        self.countList = []
+        self.prev = ""
+        self.substring = ""
 
         plt.style.use('bmh')
         self.figure = Figure(figsize=(8, 4))
@@ -53,16 +56,34 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
         self.xdata = [0]
         self.ydata = [[0], [0]]
 
+        # additional file exception handling for stats.json file
+        try:
+            with open ("stats.json", "r") as json_file:
+                data = json.load(json_file)
+                self.currentTime = QTime.fromString(data['time'], "hh:mm:ss")
+                self.frequency = data['frequency']
+        except FileNotFoundError: 
+            with open ("stats.json", "w") as json_file:
+                json.dump({"day": datetime.datetime.now().day, "time": "00:00:00", "frequency": {}}, json_file)
+            try:
+                size = os.path.getsize(self.file_path) 
+                if len(self.frequency) == 0 and size > 0:
+                    with open(self.file_path, "r") as temp:
+                        key = (next(iter(temp)))[0:10]
+                        self.frequency.update({key: ""})
+            except FileNotFoundError as e: 
+                print(f"[ANALYTICS] Failed to read CSV: {e}")
+
     def set_tab(self, index):
         self.tab_active = (index == 1)
 
     def run(self):
-        self._is_running = True
-        while self._is_running:
+        while self.isRunning():
             if self.tab_active:
                 self.progress.emit()
                 try:
                     self.read_new_data_incrementally()
+                    self.most_frequent()
                     self.update_plot.emit()
                 except Exception as e:
                     print(f"[ANALYTICS] Error updating plot: {e}")
@@ -87,9 +108,15 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
                         try:
                             confidence = int(float(row[-1]))
                             head_tilt = float(row[4])
+                            self.substring = (row[0])[:10]
                             self.ydata[0].append(confidence)
                             self.ydata[1].append(head_tilt)
                             self.xdata.append(self.xdata[-1] + interval)
+                            if (self.prev != "" and self.substring != self.prev):
+                                self.most_frequent()
+                                self.countList.clear()
+                            (self.countList).append(row[3])
+                            self.prev = self.substring
                         except (ValueError, IndexError):
                             continue
 
@@ -121,9 +148,19 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
             # It may be machine dependent. Not sure. Not like it matters right now.
         except Exception as e:
             print(f"[ANALYTICS] uh oh! plot drawing failed!: {e}")
+    
+    # responsible for collecting mode of posture score associated with each day
+    def most_frequent(self):
+        if len(self.countList) > 0:
+            self.frequency.update({self.prev: max(set(self.countList), key = self.countList.count)})
+        data = {}
+        with open("stats.json", "r") as json_file:
+            data = json.load(json_file)
+        data['frequency'] = self.frequency
+        with open("stats.json", "w") as json_file:
+            json.dump(data, json_file)
 
     def stop(self):
-        self._is_running = False
         self.wait(2000)
 
 # speech thread
@@ -411,6 +448,9 @@ class App(QMainWindow):
             )
             self.product_grid.addWidget(card, r, c)
         self.product_grid.setRowStretch((len(products) + cols - 1) // cols + 1, 1)
+    
+    def update_stopwatch(self):
+        self.graph_thread.currentTime = self.graph_thread.currentTime.addMSecs(self.timer.interval())
 
     def init_recommendations_tab(self):
         self.recommendations_tab.setObjectName("RecsTab")
@@ -528,7 +568,7 @@ class App(QMainWindow):
         self.live_tab.layout().addWidget(live_wrapper)
 
     # analytics tab
-   def init_analytics_tab(self):
+    def init_analytics_tab(self):
         layout = QVBoxLayout()
         title = QLabel("Posture Analytics")
         title.setFont(QFont("Press Start 2P", 14))
@@ -542,6 +582,11 @@ class App(QMainWindow):
             lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex())
         )
         self.graph_thread.update_plot.connect(self.graph_thread.plot_on_main_thread)
+
+        self.timer = QTimer()
+        self.timer.setInterval(100)
+        self.timer.timeout.connect(self.update_stopwatch)
+        self.timer.start()
 
         self.graph_thread.start()
 
@@ -1111,7 +1156,6 @@ class App(QMainWindow):
     def _export_voice_settings(self):
         """Export voice settings to a file"""
         from PyQt5.QtWidgets import QFileDialog
-        import json
 
         filepath, _ = QFileDialog.getSaveFileName(
             self,
@@ -1131,7 +1175,6 @@ class App(QMainWindow):
     def _import_voice_settings(self):
         """Import voice settings from a file"""
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
-        import json
 
         filepath, _ = QFileDialog.getOpenFileName(
             self,
@@ -1316,10 +1359,25 @@ class App(QMainWindow):
             self.set_status_detail(f"Analysis: {text}")
 
     def closeEvent(self, event):
+        
         if self.video_thread.isRunning(): self.video_thread.stop()
         if self.speech_thread.isRunning(): self.speech_thread.stop()
-        event.accept()
 
+        # responsible for "appending" to json file
+        # checks if current day is the same, if so, still copy session time
+        # if new day, start from scratch
+        data = {}
+        timestamp = "00:00:00"
+        with open("stats.json", "r") as json_file:
+            data = json.load(json_file)
+        if data['day'] == datetime.datetime.now().day:
+            timestamp = self.graph_thread.currentTime.toString("hh:mm:ss")
+        data['time'] = timestamp
+        with open("stats.json", "w") as json_file:
+            json.dump(data, json_file)
+        
+        if self.graph_thread.isRunning(): self.graph_thread.stop()
+        event.accept()
 
 if __name__ == '__main__':
     import sys
