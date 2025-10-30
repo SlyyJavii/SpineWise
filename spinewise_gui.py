@@ -722,7 +722,7 @@ class App(QMainWindow):
         self.live_tab.layout().addWidget(live_wrapper)
 
     # analytics tab
-   def init_analytics_tab(self):
+    def init_analytics_tab(self):
         layout = QVBoxLayout()
         title = QLabel("Posture Analytics")
         title.setFont(QFont("Press Start 2P", 14))
