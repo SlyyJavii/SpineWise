@@ -14,6 +14,7 @@ from backend import (
     normalize_lighting, is_calibrating, calibration_start_time, calibration_data,
     set_gui_mode
 )
+from backend import get_recommendation_context
 
 # theme importing
 from spinewise_theme import (
@@ -216,6 +217,7 @@ class SpeechRecognitionThread(QThread):
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     update_stats_signal = pyqtSignal(str)
+    update_reco_context_signal = pyqtSignal(dict)
 
     def __init__(self, show_landmarks=False):
         super().__init__()
@@ -249,11 +251,15 @@ class VideoThread(QThread):
                         face_results.face_landmarks if face_results.face_landmarks else None
                     )
                     self.update_stats_signal.emit(result)
+                    #send reco context for recommendation tab
+                    ctx = get_recommendation_context()
+                    self.update_reco_context_signal.emit(ctx)
+
                 else:
                     self.update_stats_signal.emit("No pose detected")
                 rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb.shape
-                qt_image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+                qt_image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
                 self.processed_queue.put(qt_image)
 
     def run(self):
@@ -280,13 +286,49 @@ class VideoThread(QThread):
     def stop(self):
         self._run_flag = False
 
+from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt5.QtCore import QByteArray
+
+class ImageLoader(QObject):
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            QObject.__init__(cls._instance)
+            cls._instance.nam = QNetworkAccessManager()
+            cls._instance.cache = {}
+        return cls._instance
+
+    def fetch(self, url, on_ready):
+        if not url:
+            on_ready(None); return
+        if url in self.cache:
+            on_ready(self.cache[url]); return
+        reply = self.nam.get(QNetworkRequest(QUrl(url)))
+        reply.finished.connect(lambda r=reply, cb=on_ready, u=url: self._done(r, cb, u))
+
+    def _done(self, reply, on_ready, url):
+        data = reply.readAll()
+        pix = QPixmap()
+        if not data.isEmpty():
+            pix.loadFromData(QByteArray(data))
+        self.cache[url] = pix if not pix.isNull() else None
+        on_ready(self.cache[url])
+        reply.deleteLater()
+
 # product card
 class ProductCard(QFrame):
-    def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, parent=None):
+    def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, image_url = "", parent=None):
         super().__init__(parent)
+        self.url = (url or "").strip()
         self.setObjectName("ProductCard")
         self.setStyleSheet(PRODUCT_CARD_QSS)
         v = QVBoxLayout(self)
+        self.img = QLabel()
+        self.img.setFixedHeight(140)
+        self.img.setAlignment(Qt.AlignCenter)
+        self.img.setStyleSheet("background:#F6F8FF; border-radius:10px;")
+        v.addWidget(self.img)
         title_lbl = QLabel(title or "—")
         title_lbl.setObjectName("CardTitle")
         title_lbl.setWordWrap(True)
@@ -295,6 +337,8 @@ class ProductCard(QFrame):
         top = QHBoxLayout(); top.addWidget(title_lbl, 1); top.addWidget(pill, 0, Qt.AlignRight); v.addLayout(top)
         why_lbl = QLabel(why or "—"); why_lbl.setObjectName("Why"); why_lbl.setWordWrap(True); v.addWidget(why_lbl)
         meta = [];
+        if self.url:
+            self.setCursor(Qt.PointingHandCursor)
         if rating: meta.append(f"⭐ {rating}")
         if reviews: meta.append(f"({reviews} reviews)")
         meta_lbl = QLabel(" ".join(meta) if meta else " "); meta_lbl.setObjectName("Meta"); v.addWidget(meta_lbl)
@@ -303,6 +347,54 @@ class ProductCard(QFrame):
         if url:
             link = QLabel(f'<a href="{url}">Open</a>'); link.setOpenExternalLinks(True); bottom.addStretch(1); bottom.addWidget(link)
         v.addLayout(bottom)
+                # Load image async
+        if image_url:
+            ImageLoader().fetch(image_url, self._set_image)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.url:
+            QDesktopServices.openUrl(QUrl(self.url))
+        super().mousePressEvent(e)
+
+    def _set_image(self, pix):
+        if pix:
+            self.img.setPixmap(pix.scaled(self.img.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            self.img.setText("No image")
+
+class CoachCard(QFrame):
+    def __init__(self, title, bullets=None, chips=None, confidence=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("CoachCard")
+        self.setStyleSheet("""
+            #CoachCard { background:#FFFFFF; border:1px solid #DFE8FF; border-radius:12px; }
+            #Title { font-weight:600; font-size:14px; color:#0F2238; }
+            #Chip { padding:2px 8px; border-radius:10px; background:#EAF2FF; color:#0B5CAD; font-size:11px; }
+            #Body { color:#2E3C51; }
+            #Conf { color:#5A6B84; font-size:11px; }
+        """)
+        v = QVBoxLayout(self); v.setContentsMargins(12,10,12,12); v.setSpacing(6)
+
+        t = QLabel(title or "—"); t.setObjectName("Title")
+        v.addWidget(t)
+
+        if chips:
+            row = QHBoxLayout()
+            for c in chips[:4]:
+                chip = QLabel(c); chip.setObjectName("Chip")
+                row.addWidget(chip)
+            row.addStretch(1)
+            v.addLayout(row)
+
+        if bullets:
+            for b in bullets[:4]:
+                bl = QLabel("• " + b); bl.setObjectName("Body")
+                v.addWidget(bl)
+
+        if confidence is not None:
+            v.addSpacing(4)
+            v.addWidget(QLabel(f"Confidence: {int(confidence*100)}%"), 0, Qt.AlignLeft)
+
 
 # main window
 class App(QMainWindow):
@@ -345,6 +437,11 @@ class App(QMainWindow):
         self.init_settings_tab()
         self.init_about_tab()
 
+        #recommendation tab
+        self.current_reco_context = {"pattern": None, "confidence": None, "tags": [], "evidence": {}}
+        self.video_thread.update_reco_context_signal.connect(self._on_reco_context)
+
+
         # default engine mode
         # Sets GUI dropdown and backend mode to rule based at startup
         if hasattr(self, "engine_combo"):
@@ -362,6 +459,65 @@ class App(QMainWindow):
         except Exception as e:
             self.set_status_detail(f"Failed to switch engine: {e}")
 
+    def _render_coach_from_context(self, ctx: dict):
+        pat = ctx.get("pattern") or "—"
+        conf = ctx.get("confidence")
+        tags = ", ".join(ctx.get("tags") or []) or "—"
+        conf_txt = f"{int(conf*100)}%" if conf is not None else "—"
+        if hasattr(self, "ctx_summary"):
+            self.ctx_summary.setText(f"Pattern: {pat}    Confidence: {conf_txt}    Tags: {tags}")
+
+        # clear grid
+        while hasattr(self, "coach_grid") and self.coach_grid.count():
+            w = self.coach_grid.takeAt(0).widget()
+            if w: w.deleteLater()
+
+        # choose up to 3 concise cards
+        cards = []
+        if pat == "forward_head":
+            cards = [
+                ("Setup",    ["Raise monitor to eye level", "Keep keyboard close", "Sit close to desk"], ["monitor_low", "reach"]),
+                ("Exercises",["Chin tucks 3×10", "Wall slides 2×10", "Thoracic extension 2×10"], ["cervical"]),
+                ("Habits",   ["20–20–20 eye breaks", "Stand 5 min each hour"], ["phone_neck"])
+            ]
+        #rounded shoulders isnt currently being used
+        elif pat == "rounded_shoulders":
+            cards = [
+                ("Setup",    ["Elbows under shoulders", "Armrests just below elbows"], ["reach"]),
+                ("Exercises",["Doorway pec stretch 3×30s", "Band pull-aparts 3×15"], ["pec_short"]),
+                ("Habits",   ["Daily posture reset cue", "Light rows 2×/week"], [])
+            ]
+        elif pat == "slouched_sitting":
+            cards = [
+                ("Setup",    ["Hips ≈ knees", "Feet fully supported", "Small lumbar support"], ["pelvis"]),
+                ("Exercises",["Brugger relief 3×/day", "Glute squeeze 3×10"], []),
+                ("Habits",   ["Stand for calls", "Micro-break timer"], [])
+            ]
+        else:
+            cards = [("Maintenance", ["Micro-breaks", "5-min mobility daily", "Alternate sit/stand"], [])]
+
+        for i, (title, bullets, chips) in enumerate(cards):
+            r, c = divmod(i, 3)
+            self.coach_grid.addWidget(CoachCard(title, bullets, chips, conf), r, c)
+
+
+
+    def _on_reco_context(self, ctx: dict):
+        self.current_reco_context = ctx or {"pattern": None, "confidence": None, "tags": [], "evidence": {}}
+
+        pat = self.current_reco_context.get("pattern") or "—"
+        conf = self.current_reco_context.get("confidence")
+        tags = ", ".join(self.current_reco_context.get("tags") or []) or "—"
+
+        if hasattr(self, "reco_pattern_lbl"):
+            self.reco_pattern_lbl.setText(f"Pattern: {pat}")
+        if hasattr(self, "reco_conf_lbl"):
+            self.reco_conf_lbl.setText(f"Confidence: {'—' if conf is None else f'{int(conf*100)}%'}")
+        if hasattr(self, "reco_tags_lbl"):
+            self.reco_tags_lbl.setText(f"Tags: {tags}")
+
+        # new: refresh coach cards
+        self._render_coach_from_context(self.current_reco_context)
 
     # recommendations tab
     def _on_refresh_products_from_csv(self):
@@ -407,7 +563,7 @@ class App(QMainWindow):
             r, c = divmod(i, cols)
             card = ProductCard(
                 title=p.get("title"), category=p.get("category"), why=p.get("why"),
-                price_text=p.get("price_text"), rating=p.get("rating"), reviews=p.get("reviews"), url=p.get("url")
+                price_text=p.get("price_text"), rating=p.get("rating"), reviews=p.get("reviews"), url=p.get("url"), image_url=p.get("image_url", "")
             )
             self.product_grid.addWidget(card, r, c)
         self.product_grid.setRowStretch((len(products) + cols - 1) // cols + 1, 1)
@@ -417,12 +573,35 @@ class App(QMainWindow):
         root = QWidget(); root.setObjectName("RecsRoot"); root.setStyleSheet(RECS_QSS)
         outer = QVBoxLayout(root); outer.setContentsMargins(16,16,16,16); outer.setSpacing(14)
 
-        cards_title = QLabel("Recommended Products"); cards_title.setProperty("class", "SectionTitle"); cards_title.setObjectName("SectionTitle"); cards_title.setAlignment(Qt.AlignLeft)
+        #live coach might remove kind of trash updates very quickly 
+        coach_title = QLabel("Live Coach")
+        coach_title.setProperty("class", "SectionTitle")
+        coach_title.setAlignment(Qt.AlignLeft)
+        outer.addWidget(coach_title)
+
+        self.ctx_summary = QLabel("Pattern: —    Confidence: —    Tags: —")
+        self.ctx_summary.setStyleSheet("color:#5A6B84; margin-bottom:6px;")
+        outer.addWidget(self.ctx_summary)
+
+        self.coach_container = QWidget()
+        self.coach_grid = QGridLayout(self.coach_container)
+        self.coach_grid.setContentsMargins(0,0,0,0)
+        self.coach_grid.setHorizontalSpacing(12)
+        self.coach_grid.setVerticalSpacing(12)
+        outer.addWidget(self.coach_container)
+
+        #products area
+        cards_title = QLabel("Recommended Products")
+        cards_title.setProperty("class", "SectionTitle")
+        cards_title.setAlignment(Qt.AlignLeft)
         outer.addWidget(cards_title)
 
         tools = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh from CSV"); refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary"); refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
-        tools.addWidget(refresh_btn, 0); tools.addStretch(1); outer.addLayout(tools)
+        refresh_btn = QPushButton("Refresh from CSV")
+        refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary")
+        refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
+        tools.addWidget(refresh_btn, 0); tools.addStretch(1)
+        outer.addLayout(tools)
 
         self.products_container = QWidget()
         self.product_grid = QGridLayout(self.products_container)
@@ -431,30 +610,45 @@ class App(QMainWindow):
         self.product_grid.setVerticalSpacing(12)
         outer.addWidget(self.products_container)
 
-        controls_title = QLabel("Fine-tune & Export"); controls_title.setObjectName("SubTitle"); controls_title.setProperty("class", "SubTitle")
+        controls_title = QLabel("Fine-tune & Export")
+        controls_title.setObjectName("SubTitle"); controls_title.setProperty("class", "SubTitle")
         outer.addWidget(controls_title)
 
         filters_row = QHBoxLayout()
-        issue_lbl = QLabel("Focus issues:"); self.issue_filter_input = QLineEdit(); self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
+        issue_lbl = QLabel("Focus issues:")
+        self.issue_filter_input = QLineEdit()
+        self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
         filters_row.addWidget(issue_lbl); filters_row.addWidget(self.issue_filter_input, 1)
-        budget_lbl = QLabel("Budget:"); self.budget_input = QLineEdit(); self.budget_input.setPlaceholderText("Max $ (optional)"); self.budget_input.setFixedWidth(160)
+        budget_lbl = QLabel("Budget:")
+        self.budget_input = QLineEdit(); self.budget_input.setPlaceholderText("Max $ (optional)")
+        self.budget_input.setFixedWidth(160)
         filters_row.addWidget(budget_lbl); filters_row.addWidget(self.budget_input)
         outer.addLayout(filters_row)
 
         self.recs_table = QTableWidget(); self.recs_table.setColumnCount(6)
-        self.recs_table.setHorizontalHeaderLabels(["Product", "Category", "Why it helps", "Confidence", "Price", "Link"])
+        # more generic headers so tips/products both make sense
+        self.recs_table.setHorizontalHeaderLabels(["Item", "Kind", "Details", "Confidence", "Price", "Link"])
         self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.recs_table.setEditTriggers(QTableWidget.NoEditTriggers)
         outer.addWidget(self.recs_table)
 
         buttons = QHBoxLayout()
-        generate_btn = QPushButton("Generate Recommendations"); generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary"); generate_btn.clicked.connect(self._on_generate_recommendations)
+        generate_btn = QPushButton("Generate Recommendations")
+        generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary")
+        generate_btn.clicked.connect(self._on_generate_recommendations)
         save_btn = QPushButton("Save as CSV"); save_btn.clicked.connect(self._on_save_recommendations_csv)
-        buttons.addWidget(generate_btn); buttons.addWidget(save_btn); buttons.addStretch(1); outer.addLayout(buttons)
+        buttons.addWidget(generate_btn); buttons.addWidget(save_btn); buttons.addStretch(1)
+        outer.addLayout(buttons)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(root)
-        main_layout = QVBoxLayout(); main_layout.addWidget(scroll); self.recommendations_tab.setLayout(main_layout)
+        main_layout = QVBoxLayout(); main_layout.addWidget(scroll)
+        self.recommendations_tab.setLayout(main_layout)
+
+        # initial content
         self._on_refresh_products_from_csv()
+        # also render coach once with current (empty) context
+        self._render_coach_from_context(self.current_reco_context)
+
 
     # live tab
     def init_live_tab(self):
@@ -877,41 +1071,121 @@ class App(QMainWindow):
         layout.addWidget(scroll);
         self.about_tab.setLayout(layout)
 
-    # recs logic
+#main code when clicking generate recommendation
     def _on_generate_recommendations(self):
+        if getattr(self, "_recs_busy", False):
+            return
+        self._recs_busy = True
+        self.set_status_detail("Finding products…")
+        QTimer.singleShot(0, self._generate_recommendations_inner)
+
+    # recs logic
+    def _generate_recommendations_inner(self):
         try:
-            posture_history = getattr(backend, "get_posture_history", lambda: [])()
-            references = getattr(backend, "get_recommendation_references", lambda: {})()
-            focus_text = (self.issue_filter_input.text() or "").strip()
+            #Live context
+            ctx  = getattr(self, "current_reco_context",
+                        {"pattern": None, "confidence": None, "tags": [], "evidence": {}})
+            pat  = ctx.get("pattern")
+            conf = ctx.get("confidence")
+
+            # Context aware coach tip always prepended so the table isn't empty
+            if pat == "forward_head":
+                plan_row = [{
+                    "title": "Coach tip: Counter forward head",
+                    "category": "Plan",
+                    "why": "Raise monitor to eye level, 20–20–20 breaks, chin tucks (3×10).",
+                    "confidence": conf, "price_text": "—", "url": ""
+                }]
+            elif pat == "slouched_sitting":
+                plan_row = [{
+                    "title": "Coach tip: Neutral pelvis + foot support",
+                    "category": "Plan",
+                    "why": "Seat height hips≈knees, feet fully supported, slight lumbar support.",
+                    "confidence": conf, "price_text": "—", "url": ""
+                }]
+            else:
+                plan_row = [{
+                    "title": "Coach tip: Maintain neutral",
+                    "category": "Plan",
+                    "why": "Short posture-check timer + micro-breaks to keep consistency.",
+                    "confidence": conf, "price_text": "—", "url": ""
+                }]
+
+            # product lookup
+            references      = getattr(backend, "get_recommendation_references", lambda: {})()
+
+            focus_text  = (self.issue_filter_input.text() or "").strip()
             extra_focus = [s.strip() for s in focus_text.split(",") if s.strip()]
+
             budget_raw = (self.budget_input.text() or "").strip()
-            try: budget = float(budget_raw) if budget_raw else None
-            except ValueError: budget = None
-            weights = None
-            issues = extra_focus if extra_focus else posture_history
-            results = getattr(backend, "query_products_via_serpapi", lambda *args, **kwargs: [])(
-                issues=issues, references=references, extra_focus=extra_focus, budget=budget, weights=weights
+            try:
+                budget = float(budget_raw) if budget_raw else None
+            except ValueError:
+                budget = None
+
+            # build issues user focus > live pattern 
+            def _norm(s): return s.lower().replace(" ", "_")
+            KNOWN = {"forward_head", "slouched_sitting"}  # shoulders removed for now
+
+            issues = [_norm(s) for s in (extra_focus or []) if _norm(s) in KNOWN]
+
+            # only trust live pattern if confident enough
+            if not issues and pat in KNOWN and (conf is None or conf >= 0.5):
+                issues = [pat]
+             
+            # if still nothing, we pass [] to backend it will use mixed base-case queries
+            if not issues:
+                issues = []
+
+            results = getattr(backend, "query_products_via_serpapi", lambda *a, **k: [])(
+            issues=issues,
+            references=references,
+            extra_focus=extra_focus,
+            budget=budget,
+            weights=None
             )
-            self._populate_recs_table(results)
+
+            # render
+            products = plan_row + (results or [])
+            if results:
+                self._last_products = products
+            else:
+                products = getattr(self, "_last_products", products)
+            self._display_product_cards(products)
+            self._populate_recs_table(products)
             self.set_status_detail("Recommendations updated.")
         except Exception as e:
             self.set_status_detail(f"Failed to get recommendations: {e}")
+        finally:
+            self._recs_busy = False
 
-    def _populate_recs_table(self, products):
+
+
+    def _populate_recs_table(self, items):
         self.recs_table.setRowCount(0)
-        if not products:
-            self.recs_table.setRowCount(1); self.recs_table.setItem(0,0,QTableWidgetItem("No recommendations yet.")); return
-        self.recs_table.setRowCount(len(products))
-        for r, p in enumerate(products):
-            title = p.get("title", "—"); cat = p.get("category", "—"); why = p.get("why", "—"); conf = p.get("confidence", None)
-            price = p.get("price_text", "—"); url = p.get("url", "")
-            self.recs_table.setItem(r,0,QTableWidgetItem(title))
-            self.recs_table.setItem(r,1,QTableWidgetItem(cat))
-            self.recs_table.setItem(r,2,QTableWidgetItem(why))
+
+        only_plan = bool(items) and all((i.get("category") == "Plan") for i in items)
+        self.recs_table.setVisible(not only_plan)
+        if only_plan or not items:
+            return
+
+        self.recs_table.setRowCount(len(items))
+        for r, p in enumerate(items):
+            title = p.get("title", "—")
+            kind  = p.get("category", "—")
+            why   = p.get("why", "—")
+            conf  = p.get("confidence", None)
+            price = p.get("price_text", "—")
+            url   = p.get("url", "")
+
+            self.recs_table.setItem(r, 0, QTableWidgetItem(title))
+            self.recs_table.setItem(r, 1, QTableWidgetItem(kind))
+            self.recs_table.setItem(r, 2, QTableWidgetItem(why))
             conf_display = "—" if conf is None else f"{round(float(conf)*100):d}%"
-            self.recs_table.setItem(r,3,QTableWidgetItem(conf_display))
-            self.recs_table.setItem(r,4,QTableWidgetItem(price))
-            self.recs_table.setItem(r,5,QTableWidgetItem(url if url else "—"))
+            self.recs_table.setItem(r, 3, QTableWidgetItem(conf_display))
+            self.recs_table.setItem(r, 4, QTableWidgetItem(price))
+            self.recs_table.setItem(r, 5, QTableWidgetItem(url if url else "—"))
+
 
     def _on_save_recommendations_csv(self):
         try:
@@ -1247,6 +1521,7 @@ class App(QMainWindow):
         self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
+        self.video_thread.update_reco_context_signal.connect(self._on_reco_context)
         self.video_thread.start()
         self.start_button.setEnabled(False); self.stop_button.setEnabled(True)
         self.image_label.setMinimumSize(800,480); self.image_label.setText("")
