@@ -72,7 +72,7 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
                 size = os.path.getsize(self.file_path) 
                 if len(self.frequency) == 0 and size > 0:
                     with open(self.file_path, "r") as temp:
-                        key = (next(iter(temp)))[0:10]
+                        key = next((next(iter(temp))))[0:10]
                         self.frequency.update({key: ""})
             except FileNotFoundError as e: 
                 print(f"[ANALYTICS] Failed to read CSV: {e}")
@@ -118,7 +118,10 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
                             if (self.prev != "" and self.substring != self.prev):
                                 self.most_frequent()
                                 self.countList.clear()
-                            (self.countList).append(row[3])
+                            
+                            score = row[3]
+                            if score == "Good Posture" or score == "Moderately Bad Posture" or score == "Bad Posture":
+                                (self.countList).append(score)
                             self.prev = self.substring
                         except (ValueError, IndexError):
                             continue
