@@ -1,13 +1,17 @@
-import os, queue, cv2, csv, json, datetime, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, speech_recognition as sr
+import os, queue, cv2, csv, json, datetime, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, \
+    speech_recognition as sr
+import re
+
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame,
     QVBoxLayout, QWidget, QTabWidget, QMainWindow, QFileDialog, QTextEdit, QDoubleSpinBox,
     QScrollArea, QSpinBox, QHBoxLayout, QCheckBox, QFormLayout, QSlider, QGroupBox, QProgressBar,
     QTableWidgetItem, QTableWidget, QGridLayout, QHeaderView, QAction, QLineEdit
 )
-from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPainter, QColor
+from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPainter, \
+    QColor
 from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve, QThread, pyqtSignal, QEvent, QTimer, \
-    QObject, QTime
+    QObject, QTime, QDate
 
 from backend import (
     analyze_posture, get_pose_landmarker, get_face_landmarker, draw_landmarks,
@@ -18,12 +22,13 @@ from backend import (
 # theme importing
 from spinewise_theme import (
     apply_palette, APP_QSS, RECS_QSS, PRODUCT_CARD_QSS, LIVE_IMAGE_QSS, STATUS_PANEL_QSS,
-    BTN_SUCCESS_QSS, POPUP_FRAME_QSS, DOT_QSS, posture_style, voice_status_style
+    BTN_SUCCESS_QSS, POPUP_FRAME_QSS, DOT_QSS, posture_style, voice_status_style, COLORS
 )
 from voice_config import voice_config
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
 
 class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy fix
     # Seems to have helped here and there with minimizing crashes (It also now works on my machine?)
@@ -42,14 +47,13 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
         super().__init__()
         self.file_path = "posture_trend_log.csv"
         self.tab_active = False
-        self.currentTime = QTime(0, 0, 0, 0)
-        self.file_position = 0
+        self.currentTime = self.totalTime = QTime(0, 0, 0, 0)
         self.frequency = {}
         self.countList = []
-        self.prev = ""
-        self.substring = ""
-        self.streak = 0
-        self.index = 0
+        self.prev = self.subsring = ""
+        self.streak = self.file_position = self.index = self.currentDay = 0
+        self.avg_counter = 1
+        self.last_emitted_streak = -1
 
         plt.style.use('bmh')
         self.figure = Figure(figsize=(8, 4))
@@ -61,20 +65,24 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
 
         # additional file exception handling for stats.json file
         try:
-            with open ("stats.json", "r") as json_file:
+            with open("stats.json", "r") as json_file:
                 data = json.load(json_file)
-                self.currentTime = QTime.fromString(data['time'], "hh:mm:ss")
+                self.currentDay = data['day']
+                self.avg_counter = data['counter']
+                self.totalTime = QTime.fromString(data['time'], "hh:mm:ss")
                 self.frequency = data['frequency']
-        except FileNotFoundError: 
-            with open ("stats.json", "w") as json_file:
-                json.dump({"day": datetime.datetime.now().day, "time": "00:00:00", "frequency": {}}, json_file)
+        except FileNotFoundError:
+            with open("stats.json", "w") as json_file:
+                json.dump({"day" : datetime.date.today().day, "counter" : 0, "time": "00:00:00","frequency": {}}, json_file)
             try:
-                size = os.path.getsize(self.file_path) 
+                size = os.path.getsize(self.file_path)
                 if len(self.frequency) == 0 and size > 0:
                     with open(self.file_path, "r") as temp:
-                        key = next((next(iter(temp))))[0:10]
+                        csv_reader = csv.reader(temp)
+                        next(csv_reader)
+                        key = (next(csv_reader)[0])[:10]
                         self.frequency.update({key: ""})
-            except FileNotFoundError as e: 
+            except FileNotFoundError as e:
                 print(f"[ANALYTICS] Failed to read CSV: {e}")
 
     def set_tab(self, index):
@@ -118,7 +126,7 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
                             if (self.prev != "" and self.substring != self.prev):
                                 self.most_frequent()
                                 self.countList.clear()
-                            
+
                             score = row[3]
                             if score == "Good Posture" or score == "Moderately Bad Posture" or score == "Bad Posture":
                                 (self.countList).append(score)
@@ -154,36 +162,80 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
             # It may be machine dependent. Not sure. Not like it matters right now.
         except Exception as e:
             print(f"[ANALYTICS] uh oh! plot drawing failed!: {e}")
-    
+
     # responsible for collecting mode of posture score associated with each day
     def most_frequent(self):
+        """
+        Compute each day's mode posture (already stored into self.frequency),
+        calculate the consecutive 'Good Posture' streak up to the most recent date,
+        and emit streak_signal only when the streak changes.
+        """
         if len(self.countList) > 0:
-            self.frequency.update({self.prev: max(set(self.countList), key = self.countList.count)})
-            data = {}
-            with open("stats.json", "r") as json_file:
-                data = json.load(json_file)
-            data['frequency'] = self.frequency
-            
-            ### responsible for updating streak counter
-            ### signal is emitted once new streak value is discovered
-            ### new signal is hooked up to a lamba function in init_analytics
-            for k in self.frequency.values():
-                if k == "Good Posture":
-                    self.streak += 1
-                else:
-                    self.streak = 0
-            
-            if self.streak == 1:
-                self.streak_signal.emit(f"Current streak: {self.streak} day of good posture.")
-            else:
-                self.streak_signal.emit(f"Current streak: {self.streak} days of good posture.")
-            ###
+            # update today's mode (keyed by self.prev which should be the YYYY-MM-DD substring)
+            try:
+                self.frequency.update({self.prev: max(set(self.countList), key=self.countList.count)})
+            except Exception:
+                # fallback: do nothing if countList malformed
+                pass
 
-            with open("stats.json", "w") as json_file:
-                json.dump(data, json_file)
+            # safely load stats.json (so we preserve other fields like time)
+            data = {}
+            try:
+                if os.path.exists("stats.json"):
+                    with open("stats.json", "r") as json_file:
+                        data = json.load(json_file) or {}
+                data['frequency'] = self.frequency
+            except Exception:
+                data = {'frequency': self.frequency}
+
+            # --- compute streak: count consecutive days from the most recent date where status == "Good Posture" ---
+            from datetime import datetime, timedelta
+            freq_map = {}
+            dates = []
+            for k, v in self.frequency.items():
+                if not isinstance(k, str):
+                    continue
+                # Expect format YYYY-MM-DD (first 10 chars)
+                date_str = k[:10]
+                try:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    freq_map[dt] = v
+                    dates.append(dt)
+                except Exception:
+                    # ignore non-parseable keys
+                    continue
+
+            new_streak = 0
+            if dates:
+                cur = max(dates)
+                # count back consecutive days with "Good Posture"
+                while cur in freq_map and isinstance(freq_map[cur], str) and freq_map[cur].lower().startswith("good"):
+                    new_streak += 1
+                    cur -= timedelta(days=1)
+
+            self.streak = new_streak
+
+            # Emit signal only if streak changed since last emit
+            try:
+                if self.streak != self.last_emitted_streak:
+                    if self.streak == 1:
+                        self.streak_signal.emit(f"Current streak: {self.streak} day of good posture.")
+                    else:
+                        self.streak_signal.emit(f"Current streak: {self.streak} days of good posture.")
+                    self.last_emitted_streak = self.streak
+            except Exception as e:
+                print(f"[ANALYTICS] Failed emitting streak signal: {e}")
+
+            # persist stats
+            try:
+                with open("stats.json", "w") as json_file:
+                    json.dump(data, json_file)
+            except Exception as e:
+                print(f"[ANALYTICS] Failed to write stats.json: {e}")
 
     def stop(self):
         self.wait(2000)
+
 
 # speech thread
 class SpeechRecognitionThread(QThread):
@@ -264,12 +316,17 @@ class SpeechRecognitionThread(QThread):
         except Exception as e:
             self.status_update.emit(f"Mic init failed: {e}")
 
-    def enable_listening(self): self.listening_enabled = True
-    def disable_listening(self): self.listening_enabled = False
+    def enable_listening(self):
+        self.listening_enabled = True
+
+    def disable_listening(self):
+        self.listening_enabled = False
+
     def stop(self):
         self._run_flag = False
         self.listening_enabled = False
         self.wait()
+
 
 # video thread
 class VideoThread(QThread):
@@ -285,7 +342,8 @@ class VideoThread(QThread):
         self.processed_queue = None
         self.show_landmarks = show_landmarks
 
-    def set_landmark_visibility(self, show_landmarks): self.show_landmarks = show_landmarks
+    def set_landmark_visibility(self, show_landmarks):
+        self.show_landmarks = show_landmarks
 
     def process_image_queue(self):
         with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
@@ -339,6 +397,7 @@ class VideoThread(QThread):
     def stop(self):
         self._run_flag = False
 
+
 # product card
 class ProductCard(QFrame):
     def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, parent=None):
@@ -351,17 +410,31 @@ class ProductCard(QFrame):
         title_lbl.setWordWrap(True)
         pill = QLabel(category or "—")
         pill.setObjectName("Pill")
-        top = QHBoxLayout(); top.addWidget(title_lbl, 1); top.addWidget(pill, 0, Qt.AlignRight); v.addLayout(top)
-        why_lbl = QLabel(why or "—"); why_lbl.setObjectName("Why"); why_lbl.setWordWrap(True); v.addWidget(why_lbl)
+        top = QHBoxLayout();
+        top.addWidget(title_lbl, 1);
+        top.addWidget(pill, 0, Qt.AlignRight);
+        v.addLayout(top)
+        why_lbl = QLabel(why or "—");
+        why_lbl.setObjectName("Why");
+        why_lbl.setWordWrap(True);
+        v.addWidget(why_lbl)
         meta = [];
         if rating: meta.append(f"⭐ {rating}")
         if reviews: meta.append(f"({reviews} reviews)")
-        meta_lbl = QLabel(" ".join(meta) if meta else " "); meta_lbl.setObjectName("Meta"); v.addWidget(meta_lbl)
+        meta_lbl = QLabel(" ".join(meta) if meta else " ");
+        meta_lbl.setObjectName("Meta");
+        v.addWidget(meta_lbl)
         bottom = QHBoxLayout()
-        price_lbl = QLabel(price_text or "—"); price_lbl.setObjectName("Price"); bottom.addWidget(price_lbl)
+        price_lbl = QLabel(price_text or "—");
+        price_lbl.setObjectName("Price");
+        bottom.addWidget(price_lbl)
         if url:
-            link = QLabel(f'<a href="{url}">Open</a>'); link.setOpenExternalLinks(True); bottom.addStretch(1); bottom.addWidget(link)
+            link = QLabel(f'<a href="{url}">Open</a>');
+            link.setOpenExternalLinks(True);
+            bottom.addStretch(1);
+            bottom.addWidget(link)
         v.addLayout(bottom)
+
 
 # main window
 class App(QMainWindow):
@@ -375,11 +448,21 @@ class App(QMainWindow):
         self.setStyleSheet(APP_QSS)
         self.app_font = QFont("Segoe UI", 10)
 
-        self.tab_widget = QTabWidget(); self.tab_widget.setElideMode(Qt.ElideRight)
-        main_layout = QVBoxLayout(); main_layout.setAlignment(Qt.AlignTop); main_layout.setContentsMargins(16,16,16,16); main_layout.addWidget(self.tab_widget)
-        central = QWidget(); central.setLayout(main_layout); self.setCentralWidget(central)
+        self.tab_widget = QTabWidget();
+        self.tab_widget.setElideMode(Qt.ElideRight)
+        main_layout = QVBoxLayout();
+        main_layout.setAlignment(Qt.AlignTop);
+        main_layout.setContentsMargins(16, 16, 16, 16);
+        main_layout.addWidget(self.tab_widget)
+        central = QWidget();
+        central.setLayout(main_layout);
+        self.setCentralWidget(central)
 
-        self.live_tab = QWidget(); self.analytics_tab = QWidget(); self.recommendations_tab = QWidget(); self.settings_tab = QWidget(); self.about_tab = QWidget()
+        self.live_tab = QWidget();
+        self.analytics_tab = QWidget();
+        self.recommendations_tab = QWidget();
+        self.settings_tab = QWidget();
+        self.about_tab = QWidget()
         self.tab_widget.addTab(self.live_tab, "Dashboard")
         self.tab_widget.addTab(self.analytics_tab, "Analytics")
         self.tab_widget.addTab(self.recommendations_tab, "Recommendations")
@@ -412,7 +495,8 @@ class App(QMainWindow):
         self.init_recommendations_tab()
         self.speech_thread.start()
 
-        #settings handler for engine switch
+        # settings handler for engine switch
+
     def _on_engine_changed(self, idx):
         mode = self.engine_combo.itemData(idx)
         try:
@@ -420,7 +504,6 @@ class App(QMainWindow):
             self.set_status_detail(f"Detection engine set to: {self.engine_combo.currentText()}")
         except Exception as e:
             self.set_status_detail(f"Failed to switch engine: {e}")
-
 
     # recommendations tab
     def _on_refresh_products_from_csv(self):
@@ -450,9 +533,15 @@ class App(QMainWindow):
                 print("[RECS] CSV read failed:", path, e)
         if not products:
             products = [
-                {"title": "Memory Foam Neck Pillow", "category": "Neck Pillow", "why": "Supports cervical alignment during long sessions.", "confidence": None, "price_text": "$24.99", "rating": "4.5", "reviews": "12,345", "url": ""},
-                {"title": "Adjustable Posture Corrector", "category": "Posture Corrector", "why": "Gently retracts shoulders to counter slouching.", "confidence": None, "price_text": "$29.99", "rating": "4.3", "reviews": "8,901", "url": ""},
-                {"title": "Resistance Bands Set", "category": "Resistance Bands", "why": "Helps strengthen scapular stabilizers.", "confidence": None, "price_text": "$19.99", "rating": "4.6", "reviews": "22,101", "url": ""},
+                {"title": "Memory Foam Neck Pillow", "category": "Neck Pillow",
+                 "why": "Supports cervical alignment during long sessions.", "confidence": None, "price_text": "$24.99",
+                 "rating": "4.5", "reviews": "12,345", "url": ""},
+                {"title": "Adjustable Posture Corrector", "category": "Posture Corrector",
+                 "why": "Gently retracts shoulders to counter slouching.", "confidence": None, "price_text": "$29.99",
+                 "rating": "4.3", "reviews": "8,901", "url": ""},
+                {"title": "Resistance Bands Set", "category": "Resistance Bands",
+                 "why": "Helps strengthen scapular stabilizers.", "confidence": None, "price_text": "$19.99",
+                 "rating": "4.6", "reviews": "22,101", "url": ""},
             ]
         self._display_product_cards(products)
         self._populate_recs_table(products)
@@ -470,52 +559,87 @@ class App(QMainWindow):
             )
             self.product_grid.addWidget(card, r, c)
         self.product_grid.setRowStretch((len(products) + cols - 1) // cols + 1, 1)
-    
+
     def update_stopwatch(self):
         self.graph_thread.currentTime = self.graph_thread.currentTime.addMSecs(self.timer.interval())
+        self.graph_thread.totalTime = self.graph_thread.totalTime.addMSecs(self.timer.interval())
 
     def init_recommendations_tab(self):
         self.recommendations_tab.setObjectName("RecsTab")
-        root = QWidget(); root.setObjectName("RecsRoot"); root.setStyleSheet(RECS_QSS)
-        outer = QVBoxLayout(root); outer.setContentsMargins(16,16,16,16); outer.setSpacing(14)
+        root = QWidget();
+        root.setObjectName("RecsRoot");
+        root.setStyleSheet(RECS_QSS)
+        outer = QVBoxLayout(root);
+        outer.setContentsMargins(16, 16, 16, 16);
+        outer.setSpacing(14)
 
-        cards_title = QLabel("Recommended Products"); cards_title.setProperty("class", "SectionTitle"); cards_title.setObjectName("SectionTitle"); cards_title.setAlignment(Qt.AlignLeft)
+        cards_title = QLabel("Recommended Products");
+        cards_title.setProperty("class", "SectionTitle");
+        cards_title.setObjectName("SectionTitle");
+        cards_title.setAlignment(Qt.AlignLeft)
         outer.addWidget(cards_title)
 
         tools = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh from CSV"); refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary"); refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
-        tools.addWidget(refresh_btn, 0); tools.addStretch(1); outer.addLayout(tools)
+        refresh_btn = QPushButton("Refresh from CSV");
+        refresh_btn.setObjectName("Primary");
+        refresh_btn.setProperty("class", "Primary");
+        refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
+        tools.addWidget(refresh_btn, 0);
+        tools.addStretch(1);
+        outer.addLayout(tools)
 
         self.products_container = QWidget()
         self.product_grid = QGridLayout(self.products_container)
-        self.product_grid.setContentsMargins(0,0,0,0)
+        self.product_grid.setContentsMargins(0, 0, 0, 0)
         self.product_grid.setHorizontalSpacing(12)
         self.product_grid.setVerticalSpacing(12)
         outer.addWidget(self.products_container)
 
-        controls_title = QLabel("Fine-tune & Export"); controls_title.setObjectName("SubTitle"); controls_title.setProperty("class", "SubTitle")
+        controls_title = QLabel("Fine-tune & Export");
+        controls_title.setObjectName("SubTitle");
+        controls_title.setProperty("class", "SubTitle")
         outer.addWidget(controls_title)
 
         filters_row = QHBoxLayout()
-        issue_lbl = QLabel("Focus issues:"); self.issue_filter_input = QLineEdit(); self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
-        filters_row.addWidget(issue_lbl); filters_row.addWidget(self.issue_filter_input, 1)
-        budget_lbl = QLabel("Budget:"); self.budget_input = QLineEdit(); self.budget_input.setPlaceholderText("Max $ (optional)"); self.budget_input.setFixedWidth(160)
-        filters_row.addWidget(budget_lbl); filters_row.addWidget(self.budget_input)
+        issue_lbl = QLabel("Focus issues:");
+        self.issue_filter_input = QLineEdit();
+        self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
+        filters_row.addWidget(issue_lbl);
+        filters_row.addWidget(self.issue_filter_input, 1)
+        budget_lbl = QLabel("Budget:");
+        self.budget_input = QLineEdit();
+        self.budget_input.setPlaceholderText("Max $ (optional)");
+        self.budget_input.setFixedWidth(160)
+        filters_row.addWidget(budget_lbl);
+        filters_row.addWidget(self.budget_input)
         outer.addLayout(filters_row)
 
-        self.recs_table = QTableWidget(); self.recs_table.setColumnCount(6)
-        self.recs_table.setHorizontalHeaderLabels(["Product", "Category", "Why it helps", "Confidence", "Price", "Link"])
+        self.recs_table = QTableWidget();
+        self.recs_table.setColumnCount(6)
+        self.recs_table.setHorizontalHeaderLabels(
+            ["Product", "Category", "Why it helps", "Confidence", "Price", "Link"])
         self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.recs_table.setEditTriggers(QTableWidget.NoEditTriggers)
         outer.addWidget(self.recs_table)
 
         buttons = QHBoxLayout()
-        generate_btn = QPushButton("Generate Recommendations"); generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary"); generate_btn.clicked.connect(self._on_generate_recommendations)
-        save_btn = QPushButton("Save as CSV"); save_btn.clicked.connect(self._on_save_recommendations_csv)
-        buttons.addWidget(generate_btn); buttons.addWidget(save_btn); buttons.addStretch(1); outer.addLayout(buttons)
+        generate_btn = QPushButton("Generate Recommendations");
+        generate_btn.setObjectName("Primary");
+        generate_btn.setProperty("class", "Primary");
+        generate_btn.clicked.connect(self._on_generate_recommendations)
+        save_btn = QPushButton("Save as CSV");
+        save_btn.clicked.connect(self._on_save_recommendations_csv)
+        buttons.addWidget(generate_btn);
+        buttons.addWidget(save_btn);
+        buttons.addStretch(1);
+        outer.addLayout(buttons)
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(root)
-        main_layout = QVBoxLayout(); main_layout.addWidget(scroll); self.recommendations_tab.setLayout(main_layout)
+        scroll = QScrollArea();
+        scroll.setWidgetResizable(True);
+        scroll.setWidget(root)
+        main_layout = QVBoxLayout();
+        main_layout.addWidget(scroll);
+        self.recommendations_tab.setLayout(main_layout)
         self._on_refresh_products_from_csv()
 
     # live tab
@@ -591,56 +715,572 @@ class App(QMainWindow):
 
     # analytics tab
     def init_analytics_tab(self):
-        layout = QVBoxLayout()
-        title = QLabel("Posture Analytics")
-        title.setFont(QFont("Press Start 2P", 14))
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
 
-        # New QLabel, doesn't have a place in new shell so feel free to delete 
-        firstLabel = QLabel("Current streak: 0 days of good posture.")
-        
-        layout.addWidget(firstLabel)
+        root = QWidget()
+        root.setObjectName("AnalyticsRoot")
+        root.setStyleSheet(f"""
+            #AnalyticsRoot {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {COLORS['bg_base']}, stop:1 {COLORS['bg_alt']});
+            }}
+        """)
+
+        main_layout = QVBoxLayout(root)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
+
+        # Header
+        header_layout = QHBoxLayout()
+        title = QLabel("Analytics")
+        title.setFont(QFont(self.app_font.family(), 24, QFont.Bold))
+        title.setStyleSheet(f"color: #0B5CAD;")
+
+        subtitle = QLabel("Your wellness and progress at a glance")
+        subtitle.setFont(QFont(self.app_font.family(), 12))
+        subtitle.setStyleSheet(f"color: {COLORS['text_muted']};")
+
+        header_v = QVBoxLayout()
+        header_v.addWidget(title)
+        header_v.addWidget(subtitle)
+        header_v.setSpacing(4)
+
+        header_layout.addLayout(header_v)
+        header_layout.addStretch()
+
+        # Refresh button
+        refresh_btn = QPushButton("↻ Refresh")
+        refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS['brand']};
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {COLORS['brand_hover']};
+            }}
+        """)
+        refresh_btn.clicked.connect(self._refresh_analytics_data)
+        header_layout.addWidget(refresh_btn)
+
+        main_layout.addLayout(header_layout)
+
+        metrics_layout = QHBoxLayout()
+        metrics_layout.setSpacing(16)
+
+        # Card 1: Weekly Average
+        self.weekly_avg_card = QFrame()
+        self.weekly_avg_card.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding: 16px;
+            }}
+            QFrame:hover {{
+                border: 2px solid #4A90E2;
+                padding: 15px;
+            }}
+        """)
+        weekly_layout = QVBoxLayout(self.weekly_avg_card)
+        weekly_layout.setSpacing(8)
+
+        weekly_header = QHBoxLayout()
+        weekly_icon = QLabel("📊")
+        weekly_icon.setStyleSheet(f"background: #E3F2FF; border-radius: 8px; padding: 8px; font-size: 20px;")
+        weekly_icon.setFixedSize(40, 40)
+        weekly_icon.setAlignment(Qt.AlignCenter)
+        weekly_title = QLabel("Weekly Average")
+        weekly_title.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        weekly_header.addWidget(weekly_icon)
+        weekly_header.addWidget(weekly_title)
+        weekly_header.addStretch()
+        weekly_layout.addLayout(weekly_header)
+
+        self.weekly_avg_value = QLabel("--")
+        self.weekly_avg_value.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 28px; font-weight: bold;")
+        weekly_layout.addWidget(self.weekly_avg_value)
+
+        weekly_subtitle = QLabel("Average posture quality")
+        weekly_subtitle.setStyleSheet(f"color: #4A90E2; font-size: 11px;")
+        weekly_layout.addWidget(weekly_subtitle)
+
+        self.today_time_card = QFrame()
+        self.today_time_card.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding: 16px;
+            }}
+            QFrame:hover {{
+                border: 2px solid #10B981;
+                padding: 15px;
+            }}
+        """)
+        time_layout = QVBoxLayout(self.today_time_card)
+        time_layout.setSpacing(8)
+
+        time_header = QHBoxLayout()
+        time_icon = QLabel("⏱")
+        time_icon.setStyleSheet(f"background: #D1FAE5; border-radius: 8px; padding: 8px; font-size: 20px;")
+        time_icon.setFixedSize(40, 40)
+        time_icon.setAlignment(Qt.AlignCenter)
+        time_title = QLabel("Session Timer")
+        time_title.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        time_header.addWidget(time_icon)
+        time_header.addWidget(time_title)
+        time_header.addStretch()
+        time_layout.addLayout(time_header)
+
+        self.today_time_value = QLabel("0h 0m 0s")
+        self.today_time_value.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 28px; font-weight: bold;")
+        time_layout.addWidget(self.today_time_value)
+
+        time_subtitle = QLabel("Open window time (not camera activity time)")
+        time_subtitle.setStyleSheet(f"color: #10B981; font-size: 11px;")
+        time_layout.addWidget(time_subtitle)
+
+        self.today_avg_time = QLabel("0m 0s")
+        self.today_avg_time.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 28px; font-weight: bold;")
+        time_layout.addWidget(self.today_avg_time)
+
+        self.streak_card = QFrame()
+        self.streak_card.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding: 16px;
+            }}
+            QFrame:hover {{
+                border: 2px solid #8B5CF6;
+                padding: 15px;
+            }}
+        """)
+        streak_layout = QVBoxLayout(self.streak_card)
+        streak_layout.setSpacing(8)
+
+        streak_header = QHBoxLayout()
+        streak_icon = QLabel("🔥")
+        streak_icon.setStyleSheet(f"background: #EDE9FE; border-radius: 8px; padding: 8px; font-size: 20px;")
+        streak_icon.setFixedSize(40, 40)
+        streak_icon.setAlignment(Qt.AlignCenter)
+        streak_title = QLabel("Current Streak")
+        streak_title.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+        streak_header.addWidget(streak_icon)
+        streak_header.addWidget(streak_title)
+        streak_header.addStretch()
+        streak_layout.addLayout(streak_header)
+
+        self.streak_value = QLabel("0")
+        self.streak_value.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 28px; font-weight: bold;")
+        streak_layout.addWidget(self.streak_value)
+
+        self.streak_subtitle = QLabel("days of good posture")
+        self.streak_subtitle.setStyleSheet(f"color: #8B5CF6; font-size: 11px;")
+        streak_layout.addWidget(self.streak_subtitle)
+
+        metrics_layout.addWidget(self.weekly_avg_card)
+        metrics_layout.addWidget(self.today_time_card)
+        metrics_layout.addWidget(self.streak_card)
+
+        main_layout.addLayout(metrics_layout)
+
+        graphs_section = QGroupBox("Detailed Analysis")
+        graphs_section.setStyleSheet(f"""
+            QGroupBox {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding-top: 20px;
+                margin-top: 10px;
+            }}
+            QGroupBox::title {{
+                color: {COLORS['text_primary']};
+                font-weight: 600;
+                font-size: 14px;
+                padding: 0 10px;
+            }}
+        """)
+
+        graphs_layout = QVBoxLayout()
 
         self.graph_thread = GraphThread()
-        layout.addWidget(self.graph_thread.canvas)
+        self.graph_thread.canvas.setMinimumHeight(300)
+        graphs_layout.addWidget(self.graph_thread.canvas)
+
+        graphs_section.setLayout(graphs_layout)
+        main_layout.addWidget(graphs_section)
+
+        charts_layout = QHBoxLayout()
+        charts_layout.setSpacing(16)
+
+        weekly_widget = self._create_weekly_progress_widget()
+        charts_layout.addWidget(weekly_widget, 3)
+
+        monthly_widget = self._create_monthly_calendar_widget()
+        charts_layout.addWidget(monthly_widget, 2)
+
+        main_layout.addLayout(charts_layout)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(16)
+
+        main_layout.addLayout(stats_row)
+        main_layout.addStretch()
+
+        # Set scroll widget
+        scroll.setWidget(root)
+
+        # Tab layout
+        tab_layout = QVBoxLayout()
+        tab_layout.addWidget(scroll)
+        self.analytics_tab.setLayout(tab_layout)
 
         self.graph_thread.progress.connect(
             lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex())
         )
         self.graph_thread.update_plot.connect(self.graph_thread.plot_on_main_thread)
-        
-        # Responsible for handling streak signal, updates QLabel
-        self.graph_thread.streak_signal.connect(lambda x: firstLabel.setText(x))
 
-        self.timer = QTimer()
-        self.timer.setInterval(100)
-        self.timer.timeout.connect(self.update_stopwatch)
-        self.timer.start()
+        self.graph_thread.streak_signal.connect(self._update_streak_display)
 
         self.graph_thread.start()
 
         self.tab_widget.currentChanged.connect(self.graph_thread.set_tab)
 
-        desc = QLabel("This analytics panel will show posture metrics over time.")
-        desc.setFont(QFont("Press Start 2P", 9))
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
+        self.timer = QTimer()
+        self.timer.setInterval(100)
+        self.timer.timeout.connect(self.update_stopwatch)
+        self.timer.timeout.connect(self._update_time_display)  # Also update the card display
+        self.timer.start()
 
-        self.analytics_tab.setLayout(layout)
+        QTimer.singleShot(100, self._refresh_analytics_data)
+
+        # Updating Avg Time
+        if self.graph_thread.avg_counter > 1:
+            seconds_val = QTime(0, 0, 0).secsTo(self.graph_thread.totalTime)
+            seconds_val /= self.graph_thread.avg_counter
+            time_str = str(datetime.timedelta(seconds=round(seconds_val)))
+            print(time_str)
+
+            parts = time_str.split(':')
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds_val = int(parts[2])
+
+            # Format nicely
+            if hours > 0:
+                self.today_avg_time.setText(f"{hours}h {minutes}m {seconds_val}s")
+            else:
+                self.today_avg_time.setText(f"{minutes}m {seconds_val}s")
+
+    def _update_streak_display(self, streak_text):
+        try:
+            match = re.search(r'(\d+)', streak_text)
+            if not match:
+                return
+            streak_num = match.group(1)
+
+            self.streak_value.setText(streak_num)
+
+            if streak_num == "1":
+                self.streak_subtitle.setText("day of good posture")
+            else:
+                self.streak_subtitle.setText("days of good posture")
+        except Exception as e:
+            print(f"[ANALYTICS] _update_streak_display error: {e}")
+
+    def _update_time_display(self):
+        time_str = self.graph_thread.currentTime.toString("hh:mm:ss")
+        parts = time_str.split(':')
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = int(parts[2])
+
+        # Format nicely
+        if hours > 0:
+            self.today_time_value.setText(f"{hours}h {minutes}m {seconds}s")
+        else:
+            self.today_time_value.setText(f"{minutes}m {seconds}s")
+
+    def _create_weekly_progress_widget(self):
+        widget = QGroupBox("📊 Weekly Progress")
+        widget.setStyleSheet(f"""
+            QGroupBox {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                color: {COLORS['text_primary']};
+                font-weight: 600;
+                font-size: 14px;
+            }}
+        """)
+
+        layout = QVBoxLayout()
+
+        self.weekly_bars_widget = QWidget()
+        self.weekly_bars_widget.setMinimumHeight(200)
+        bars_layout = QVBoxLayout(self.weekly_bars_widget)
+
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        self.daily_progress_bars = {}
+
+        for day in days:
+            day_layout = QHBoxLayout()
+
+            day_label = QLabel(day)
+            day_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
+            day_label.setFixedWidth(40)
+
+            progress = QProgressBar()
+            progress.setRange(0, 100)
+            progress.setValue(0)
+            progress.setTextVisible(False)
+            progress.setFixedHeight(24)
+            progress.setStyleSheet(f"""
+                QProgressBar {{
+                    background: {COLORS['bg_alt']};
+                    border-radius: 12px;
+                    border: 1px solid {COLORS['border']};
+                }}
+                QProgressBar::chunk {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 {COLORS['brand']}, stop:1 {COLORS['brand_hover']});
+                    border-radius: 11px;
+                }}
+            """)
+
+            pct_label = QLabel("0%")
+            pct_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: 600;")
+            pct_label.setFixedWidth(40)
+            pct_label.setAlignment(Qt.AlignRight)
+
+            day_layout.addWidget(day_label)
+            day_layout.addWidget(progress, 1)
+            day_layout.addWidget(pct_label)
+
+            bars_layout.addLayout(day_layout)
+            self.daily_progress_bars[day] = (progress, pct_label)
+
+        layout.addWidget(self.weekly_bars_widget)
+        widget.setLayout(layout)
+
+        return widget
+
+    def _create_monthly_calendar_widget(self):
+        widget = QGroupBox("📅 Monthly Overview")
+        widget.setStyleSheet(f"""
+            QGroupBox {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding-top: 20px;
+            }}
+            QGroupBox::title {{
+                color: {COLORS['text_primary']};
+                font-weight: 600;
+                font-size: 14px;
+            }}
+        """)
+
+        layout = QVBoxLayout()
+
+        calendar_grid = QGridLayout()
+        calendar_grid.setSpacing(4)
+
+        day_headers = ["S", "M", "T", "W", "T", "F", "S"]
+        for i, day_header in enumerate(day_headers):
+            header_label = QLabel(day_header)
+            header_label.setAlignment(Qt.AlignCenter)
+            header_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600;")
+            calendar_grid.addWidget(header_label, 0, i)
+
+        self.calendar_days = {}
+        current_date = QDate.currentDate()
+        month_start = QDate(current_date.year(), current_date.month(), 1)
+        days_in_month = month_start.daysInMonth()
+        start_day = month_start.dayOfWeek() % 7
+
+        row = 1
+        col = start_day
+
+        for day in range(1, days_in_month + 1):
+            day_frame = QFrame()
+            day_frame.setFixedSize(32, 32)
+            day_frame.setStyleSheet(f"""
+                QFrame {{
+                    background: {COLORS['bg_alt']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                }}
+            """)
+
+            day_label = QLabel(str(day))
+            day_label.setAlignment(Qt.AlignCenter)
+            day_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
+
+            day_layout = QVBoxLayout(day_frame)
+            day_layout.setContentsMargins(0, 0, 0, 0)
+            day_layout.addWidget(day_label)
+
+            calendar_grid.addWidget(day_frame, row, col)
+            self.calendar_days[day] = day_frame
+
+            col += 1
+            if col > 6:
+                col = 0
+                row += 1
+
+        layout.addLayout(calendar_grid)
+
+        legend_layout = QHBoxLayout()
+        legend_layout.setSpacing(12)
+        legend_layout.addStretch()
+
+        for label, color in [("Good", COLORS['good_border']),
+                             ("Fair", COLORS['mod_border']),
+                             ("Bad", COLORS['bad_border']),
+                             ("No data", COLORS['bg_alt'])]:
+            legend_item = QHBoxLayout()
+
+            color_box = QLabel()
+            color_box.setFixedSize(12, 12)
+            color_box.setStyleSheet(f"background: {color}; border-radius: 2px;")
+
+            text_label = QLabel(label)
+            text_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
+
+            legend_item.addWidget(color_box)
+            legend_item.addWidget(text_label)
+            legend_layout.addLayout(legend_item)
+
+        legend_layout.addStretch()
+        layout.addLayout(legend_layout)
+
+        widget.setLayout(layout)
+        return widget
+
+    def _create_mini_stat_card(self, title, value, change):
+        """Create a mini statistics card"""
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS['bg_white']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 12px;
+            }}
+        """)
+
+        layout = QVBoxLayout(card)
+        layout.setSpacing(4)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+
+        value_label = QLabel(value)
+        value_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: 600;")
+
+        change_label = QLabel(change)
+        change_color = COLORS['good_text'] if "↑" in change or "+" in change else COLORS['text_muted']
+        change_label.setStyleSheet(f"color: {change_color}; font-size: 10px;")
+
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        layout.addWidget(change_label)
+
+        return card
+
+    def _refresh_analytics_data(self):
+        """Refresh all analytics data"""
+        try:
+            # Load from posture_trend_log.csv
+            if os.path.exists("posture_trend_log.csv"):
+                df = pd.read_csv("posture_trend_log.csv",
+                                 names=["Timestamp", "Mode", "Facing", "Posture Status", "Head Tilt",
+                                        "Confidence Score"])
+
+                if not df.empty:
+                    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+                    df = df.dropna(subset=['Timestamp'])
+                    df['DayOfWeek'] = df['Timestamp'].dt.day_name()
+
+                    # Update weekly progress bars
+                    for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
+                        day_data = df[df['DayOfWeek'] == day]
+                        if not day_data.empty:
+                            good_pct = (day_data['Posture Status'].str.contains('Good', case=False,
+                                                                                na=False).sum() / len(day_data)) * 100
+                            short_day = day[:3]
+                            if short_day in self.daily_progress_bars:
+                                progress_bar, pct_label = self.daily_progress_bars[short_day]
+                                progress_bar.setValue(int(good_pct))
+                                pct_label.setText(f"{int(good_pct)}%")
+
+                    # Calculate overall weekly average
+                    week_data = df[df['Timestamp'] >= df['Timestamp'].max() - pd.Timedelta(days=7)]
+                    if not week_data.empty:
+                        weekly_avg = (week_data['Posture Status'].str.contains('Good', case=False,
+                                                                               na=False).sum() / len(week_data)) * 100
+                        self.weekly_avg_value.setText(f"{int(weekly_avg)}%")
+
+            # Update calendar from frequency data
+            if os.path.exists("stats.json"):
+                with open("stats.json", "r") as f:
+                    stats = json.load(f)
+                    frequency_data = stats.get('frequency', {})
+
+                    for date_str, status in frequency_data.items():
+                        try:
+                            day_num = int(date_str.split('-')[-1])
+                            if day_num in self.calendar_days:
+                                if "good" in status.lower():
+                                    color = COLORS['good_bg']
+                                elif "moderate" in status.lower():
+                                    color = COLORS['mod_bg']
+                                else:
+                                    color = COLORS['bad_bg']
+
+                                self.calendar_days[day_num].setStyleSheet(f"""
+                                    QFrame {{
+                                        background: {color};
+                                        border: 1px solid {COLORS['border']};
+                                        border-radius: 4px;
+                                    }}
+                                """)
+                        except (ValueError, KeyError):
+                            continue
+
+        except Exception as e:
+            print(f"[ANALYTICS] Error refreshing data: {e}")
 
     # settings tab
     def init_settings_tab(self):
-        layout = QVBoxLayout(); layout.setSpacing(12)
+        layout = QVBoxLayout();
+        layout.setSpacing(12)
 
-        visual_group = QGroupBox("Visual Settings"); v_layout = QFormLayout()
-        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed"); self.landmark_checkbox.setChecked(self.show_landmarks); self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
+        visual_group = QGroupBox("Visual Settings");
+        v_layout = QFormLayout()
+        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed");
+        self.landmark_checkbox.setChecked(self.show_landmarks);
+        self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
         v_layout.addRow(QLabel("Landmarks:"), self.landmark_checkbox)
-        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed"); landmark_info.setStyleSheet("color: #5A6B84;")
+        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed");
+        landmark_info.setStyleSheet("color: #5A6B84;")
         v_layout.addRow("", landmark_info)
-        visual_group.setLayout(v_layout); layout.addWidget(visual_group)
+        visual_group.setLayout(v_layout);
+        layout.addWidget(visual_group)
 
-        #detection engine group
+        # detection engine group
         engine_group = QGroupBox("Detection Engine")
         e_layout = QFormLayout()
 
@@ -659,24 +1299,38 @@ class App(QMainWindow):
         layout.addWidget(engine_group)
         #
 
-        notif_group = QGroupBox("Notification Settings"); n_layout = QFormLayout()
+        notif_group = QGroupBox("Notification Settings");
+        n_layout = QFormLayout()
         vol_row = QHBoxLayout()
-        self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0,100); self.volume_slider.setValue(self.notification_volume)
-        self.volume_slider.setTickPosition(QSlider.TicksBelow); self.volume_slider.setTickInterval(10)
+        self.volume_slider = QSlider(Qt.Horizontal);
+        self.volume_slider.setRange(0, 100);
+        self.volume_slider.setValue(self.notification_volume)
+        self.volume_slider.setTickPosition(QSlider.TicksBelow);
+        self.volume_slider.setTickInterval(10)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        self.volume_label = QLabel(f"{self.notification_volume}%"); self.volume_label.setFixedWidth(60)
-        vol_row.addWidget(self.volume_slider,1); vol_row.addWidget(self.volume_label,0,Qt.AlignRight)
+        self.volume_label = QLabel(f"{self.notification_volume}%");
+        self.volume_label.setFixedWidth(60)
+        vol_row.addWidget(self.volume_slider, 1);
+        vol_row.addWidget(self.volume_label, 0, Qt.AlignRight)
         n_layout.addRow(QLabel("Notification Volume:"), vol_row)
 
-        self.beep_interval_spinbox = QDoubleSpinBox(); self.beep_interval_spinbox.setRange(0.5,10.0); self.beep_interval_spinbox.setSingleStep(0.5)
-        self.beep_interval_spinbox.setValue(self.beep_interval); self.beep_interval_spinbox.setSuffix(" seconds"); self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
+        self.beep_interval_spinbox = QDoubleSpinBox();
+        self.beep_interval_spinbox.setRange(0.5, 10.0);
+        self.beep_interval_spinbox.setSingleStep(0.5)
+        self.beep_interval_spinbox.setValue(self.beep_interval);
+        self.beep_interval_spinbox.setSuffix(" seconds");
+        self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
         n_layout.addRow(QLabel("Beep Interval:"), self.beep_interval_spinbox)
 
-        self.alert_duration_spinbox = QSpinBox(); self.alert_duration_spinbox.setRange(1,60); self.alert_duration_spinbox.setValue(int(self.alert_duration))
-        self.alert_duration_spinbox.setSuffix(" seconds"); self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
+        self.alert_duration_spinbox = QSpinBox();
+        self.alert_duration_spinbox.setRange(1, 60);
+        self.alert_duration_spinbox.setValue(int(self.alert_duration))
+        self.alert_duration_spinbox.setSuffix(" seconds");
+        self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
         n_layout.addRow(QLabel("Alert Duration:"), self.alert_duration_spinbox)
 
-        notif_group.setLayout(n_layout); layout.addWidget(notif_group)
+        notif_group.setLayout(n_layout);
+        layout.addWidget(notif_group)
 
         voice_group = QGroupBox("Voice Control Settings")
         voice_layout = QFormLayout()
@@ -789,11 +1443,11 @@ class App(QMainWindow):
         clear_log_button.setStyleSheet("padding: 6px 12px; font-size: 11px;")
         data_btn_layout.addWidget(clear_log_button)
 
-        #data_layout.addRow("Actions:", data_btn_layout)
+        # data_layout.addRow("Actions:", data_btn_layout)
 
-        #data_info = QLabel("Export your posture data to CSV format or clear all logged data")
-        #data_info.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
-        #data_layout.addRow("", data_info)
+        # data_info = QLabel("Export your posture data to CSV format or clear all logged data")
+        # data_info.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
+        # data_layout.addRow("", data_info)
 
         export_voice_btn = QPushButton("📤 Export Voice Settings")
         export_voice_btn.clicked.connect(self._export_voice_settings)
@@ -813,9 +1467,14 @@ class App(QMainWindow):
         data_group.setLayout(data_layout)
         layout.addWidget(data_group)
 
-        settings_inner = QWidget(); settings_inner.setLayout(layout)
-        settings_scroll = QScrollArea(); settings_scroll.setWidgetResizable(True); settings_scroll.setWidget(settings_inner)
-        outer = QVBoxLayout(); outer.addWidget(settings_scroll); self.settings_tab.setLayout(outer)
+        settings_inner = QWidget();
+        settings_inner.setLayout(layout)
+        settings_scroll = QScrollArea();
+        settings_scroll.setWidgetResizable(True);
+        settings_scroll.setWidget(settings_inner)
+        outer = QVBoxLayout();
+        outer.addWidget(settings_scroll);
+        self.settings_tab.setLayout(outer)
 
     def init_about_tab(self):
         container = QWidget()
@@ -960,8 +1619,10 @@ class App(QMainWindow):
             focus_text = (self.issue_filter_input.text() or "").strip()
             extra_focus = [s.strip() for s in focus_text.split(",") if s.strip()]
             budget_raw = (self.budget_input.text() or "").strip()
-            try: budget = float(budget_raw) if budget_raw else None
-            except ValueError: budget = None
+            try:
+                budget = float(budget_raw) if budget_raw else None
+            except ValueError:
+                budget = None
             weights = None
             issues = extra_focus if extra_focus else posture_history
             results = getattr(backend, "query_products_via_serpapi", lambda *args, **kwargs: [])(
@@ -975,31 +1636,40 @@ class App(QMainWindow):
     def _populate_recs_table(self, products):
         self.recs_table.setRowCount(0)
         if not products:
-            self.recs_table.setRowCount(1); self.recs_table.setItem(0,0,QTableWidgetItem("No recommendations yet.")); return
+            self.recs_table.setRowCount(1);
+            self.recs_table.setItem(0, 0, QTableWidgetItem("No recommendations yet."));
+            return
         self.recs_table.setRowCount(len(products))
         for r, p in enumerate(products):
-            title = p.get("title", "—"); cat = p.get("category", "—"); why = p.get("why", "—"); conf = p.get("confidence", None)
-            price = p.get("price_text", "—"); url = p.get("url", "")
-            self.recs_table.setItem(r,0,QTableWidgetItem(title))
-            self.recs_table.setItem(r,1,QTableWidgetItem(cat))
-            self.recs_table.setItem(r,2,QTableWidgetItem(why))
-            conf_display = "—" if conf is None else f"{round(float(conf)*100):d}%"
-            self.recs_table.setItem(r,3,QTableWidgetItem(conf_display))
-            self.recs_table.setItem(r,4,QTableWidgetItem(price))
-            self.recs_table.setItem(r,5,QTableWidgetItem(url if url else "—"))
+            title = p.get("title", "—");
+            cat = p.get("category", "—");
+            why = p.get("why", "—");
+            conf = p.get("confidence", None)
+            price = p.get("price_text", "—");
+            url = p.get("url", "")
+            self.recs_table.setItem(r, 0, QTableWidgetItem(title))
+            self.recs_table.setItem(r, 1, QTableWidgetItem(cat))
+            self.recs_table.setItem(r, 2, QTableWidgetItem(why))
+            conf_display = "—" if conf is None else f"{round(float(conf) * 100):d}%"
+            self.recs_table.setItem(r, 3, QTableWidgetItem(conf_display))
+            self.recs_table.setItem(r, 4, QTableWidgetItem(price))
+            self.recs_table.setItem(r, 5, QTableWidgetItem(url if url else "—"))
 
     def _on_save_recommendations_csv(self):
         try:
-            dest, _ = QFileDialog.getSaveFileName(self, "Save Recommendations", "recommendations.csv", "CSV Files (*.csv)")
+            dest, _ = QFileDialog.getSaveFileName(self, "Save Recommendations", "recommendations.csv",
+                                                  "CSV Files (*.csv)")
             if not dest: return
             import csv
             cols = [self.recs_table.horizontalHeaderItem(i).text() for i in range(self.recs_table.columnCount())]
             with open(dest, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f); writer.writerow(cols)
+                writer = csv.writer(f);
+                writer.writerow(cols)
                 for r in range(self.recs_table.rowCount()):
                     row = []
                     for c in range(self.recs_table.columnCount()):
-                        item = self.recs_table.item(r, c); row.append(item.text() if item else "")
+                        item = self.recs_table.item(r, c);
+                        row.append(item.text() if item else "")
                     writer.writerow(row)
             self.set_status_detail("Saved recommendations to CSV.")
         except Exception as e:
@@ -1013,13 +1683,17 @@ class App(QMainWindow):
         self.set_status_detail("Landmarks enabled" if self.show_landmarks else "Landmarks disabled")
 
     def _on_volume_changed(self, value):
-        self.notification_volume = value; self.volume_label.setText(f"{value}%"); backend.update_notification_volume(value)
+        self.notification_volume = value;
+        self.volume_label.setText(f"{value}%");
+        backend.update_notification_volume(value)
 
     def _on_beep_interval_changed(self, value):
-        self.beep_interval = value; backend.update_beep_interval(value)
+        self.beep_interval = value;
+        backend.update_beep_interval(value)
 
     def _on_alert_duration_changed(self, value):
-        self.alert_duration = value; backend.update_alert_duration(value)
+        self.alert_duration = value;
+        backend.update_alert_duration(value)
 
     # voice
     def toggle_voice_recognition(self, state):
@@ -1140,7 +1814,6 @@ class App(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-
             voice_config.config["commands"] = voice_config.DEFAULT_CONFIG["commands"].copy()
             voice_config.save_config()
 
@@ -1295,9 +1968,12 @@ class App(QMainWindow):
     def clear_log(self):
         try:
             if os.path.exists("posture_trend_log.csv"):
-                os.remove("posture_trend_log.csv"); self.log_table.setRowCount(1); self.log_table.setItem(0,0,QTableWidgetItem("🗑️ Log data cleared."))
+                os.remove("posture_trend_log.csv");
+                self.log_table.setRowCount(1);
+                self.log_table.setItem(0, 0, QTableWidgetItem("🗑️ Log data cleared."))
             else:
-                self.log_table.setRowCount(1); self.log_table.setItem(0,0,QTableWidgetItem("📂 No log file to clear."))
+                self.log_table.setRowCount(1);
+                self.log_table.setItem(0, 0, QTableWidgetItem("📂 No log file to clear."))
         except Exception as e:
             print("[ERROR] clear_log:", e)
 
@@ -1306,7 +1982,8 @@ class App(QMainWindow):
             dest, _ = QFileDialog.getSaveFileName(self, "Save Log", "posture_trend_log.csv", "CSV Files (*.csv)")
             if dest:
                 try:
-                    with open("posture_trend_log.csv", "r") as src, open(dest, "w") as dst: dst.write(src.read())
+                    with open("posture_trend_log.csv", "r") as src, open(dest, "w") as dst:
+                        dst.write(src.read())
                     self.set_status_detail("Log exported.")
                 except Exception as e:
                     self.set_status_detail(f"Export failed: {e}")
@@ -1316,13 +1993,16 @@ class App(QMainWindow):
     # camera control
     def start_video(self):
         if self.video_thread and self.video_thread.isRunning():
-            self.video_thread._run_flag = False; self.video_thread.wait(1000)
+            self.video_thread._run_flag = False;
+            self.video_thread.wait(1000)
         self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
         self.video_thread.start()
-        self.start_button.setEnabled(False); self.stop_button.setEnabled(True)
-        self.image_label.setMinimumSize(800,480); self.image_label.setText("")
+        self.start_button.setEnabled(False);
+        self.stop_button.setEnabled(True)
+        self.image_label.setMinimumSize(800, 480);
+        self.image_label.setText("")
         self.set_status("Monitoring Posture...", "Camera starting...", style_kind="monitor")
 
     def stop_video(self):
@@ -1340,13 +2020,17 @@ class App(QMainWindow):
 
     def force_video_stop(self):
         if self.video_thread and self.video_thread.isRunning():
-            try: self.video_thread.terminate()
-            except Exception: pass
+            try:
+                self.video_thread.terminate()
+            except Exception:
+                pass
         self.update_ui_after_stop()
 
     def update_ui_after_stop(self):
-        self.start_button.setEnabled(True); self.stop_button.setEnabled(False)
-        self.image_label.setText("Click 'Start Camera' to begin webcam feed"); self.image_label.clear()
+        self.start_button.setEnabled(True);
+        self.stop_button.setEnabled(False)
+        self.image_label.setText("Click 'Start Camera' to begin webcam feed");
+        self.image_label.clear()
         self.set_status("Camera Stopped", "⏹️ Camera stopped - App is running", style_kind="stopped")
 
     def check_app_status(self):
@@ -1373,7 +2057,8 @@ class App(QMainWindow):
         self.image_label.setPixmap(scaled)
 
     def update_stats(self, text):
-        if text and not any(w in text.lower() for w in ["detecting","stabilizing","transitioning","confirming","analyzing"]):
+        if text and not any(
+                w in text.lower() for w in ["detecting", "stabilizing", "transitioning", "confirming", "analyzing"]):
             tl = text.lower()
             if "good posture" in tl:
                 self.set_status("Good Posture", f"Analysis: {text}", style_kind="good")
@@ -1389,7 +2074,7 @@ class App(QMainWindow):
             self.set_status_detail(f"Analysis: {text}")
 
     def closeEvent(self, event):
-        
+
         if self.video_thread.isRunning(): self.video_thread.stop()
         if self.speech_thread.isRunning(): self.speech_thread.stop()
 
@@ -1398,20 +2083,27 @@ class App(QMainWindow):
         # if new day, start from scratch
         data = {}
         timestamp = "00:00:00"
+        currentDay = datetime.date.today().day
         with open("stats.json", "r") as json_file:
             data = json.load(json_file)
-        if data['day'] == datetime.datetime.now().day:
-            timestamp = self.graph_thread.currentTime.toString("hh:mm:ss")
-        data['time'] = timestamp
+            if (data['day'] == currentDay):
+                data['counter'] += 1
+                timestamp = self.graph_thread.totalTime.toString("hh:mm:ss")
+            else:
+                data['counter'] = 0
+            data['time'] = timestamp
+            data['day'] = currentDay
         with open("stats.json", "w") as json_file:
             json.dump(data, json_file)
-        
+
         if self.graph_thread.isRunning(): self.graph_thread.stop()
         event.accept()
+
 
 if __name__ == '__main__':
     import sys
     from PyQt5.QtWidgets import QApplication
+
     app = QApplication(sys.argv)
     window = App()
     window.show()
