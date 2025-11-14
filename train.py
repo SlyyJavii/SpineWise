@@ -36,55 +36,27 @@ X = df[FEATURES]
 y = df["label"].map(ORDINAL_MAP).astype(int).to_numpy()
 groups = df["session_id"].astype(str)
 
-cv = StratifiedGroupKFold(n_splits=groups.nunique())
-splits = list(cv.split(X, y, groups=groups))
+good_values = df[df["label"] == "good"]
 
-def objective(trial): # reduce n_trials below if taking too long
-    param = {
-        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
-        'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.1, log=True),
-        'num_leaves': trial.suggest_int('num_leaves', 20, 50),
-        'max_depth': trial.suggest_int('max_depth', 3, 10),
-        'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 10, 50),
-        'feature_fraction': trial.suggest_float('feature_fraction', 0.7, 1.0),
-    }
+dict1 = {}
+dict2 = {}
 
-    scores = []
-    for tr, va in splits:
-        model = LGBMClassifier(**param, verbose=-1, objective="multiclass", num_class=3)
-        model.fit(X.iloc[tr], y[tr], eval_set=[(X.iloc[va], y[va])], callbacks=[early_stopping(stopping_rounds=100)])
-        pred = model.predict(X.iloc[va])
-        rmse = mean_squared_error(y[va], pred)
-        scores.append(rmse)
+for f in FEATURES:
+    col = good_values[f].to_numpy()
+    dict1[f] = np.median(col)
+    dict2[f] = np.percentile(col, 75) - np.percentile(col, 25)
 
-    return np.mean(scores)
-study = optuna.create_study(direction='minimize')
-study.optimize(objective, n_trials=50)
+bundle = joblib.load("models/posture_lgbm_classifier.pkl")
 
-params = study.best_params
-final_cla = LGBMClassifier(**params, verbose=-1, objective="multiclass", num_class=3)
-final_cla.fit(X, y)
+bundle["dataset_baseline_median"] = dict1
+bundle["dataset_baseline_iqr"] = dict2
 
-cla_f1 = []
-for tr_idx, va_idx in splits:
-    cla = LGBMClassifier(**params, verbose=-1, objective="multiclass", num_class=3)
-    cla.fit(X.iloc[tr_idx], y[tr_idx])
-    yhat_val = cla.predict(X.iloc[va_idx])
-    cla_f1.append(f1_score(y[va_idx], yhat_val, average="macro"))
+jj = {0: "hi", 1: "hello", 2: "ok"}
 
-cv_macro_f1 = float(np.mean(cla_f1))
+#joblib.dump(bundle, "models/posture_lgbm_classifier.pkl")
 
-print(f"Grouped-CV macro-F1 (CLASSIFIER): {cv_macro_f1:.3f}")
-
-bundle = {
-    "model": final_cla,
-    "metadata": {
-        "best_params": params,
-        "feature_order": FEATURES,
-        "ordinal_map": {"bad":0, "moderate":1, "good":2},
-        "cv_macro_f1": float(cv_macro_f1),
-        "trained_on": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-}
-
-joblib.dump(bundle, "models/LGBM_Posture_Classifier_v1.pkl")
+#bundle_path = "models/posture_lgbm_classifier.pkl"
+#joblib.dump(
+    #{"model": best_clf, "feature_names": FEATURES, "label_to_id": LABEL_TO_ID, "id_to_label": ID_TO_LABEL, "calibrator": calibrator, "decision_params": best_decision_params},
+    #bundle_path
+#)

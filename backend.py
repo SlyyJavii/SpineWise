@@ -1,23 +1,17 @@
 import cv2 as cv
-import time
 import csv
 from datetime import datetime
 import mediapipe as mp
-import math
 import speech_recognition as sr
 import threading
 import numpy as np
 import pygame
 import os
-import time
 from voice_config import voice_config
 from os.path import exists
 from urllib.request import urlretrieve
-from log import record_frame
 from posture_image_logger import save_posture_image, initialize_folders
-from scipy.special import softmax as _softmax
-import joblib
-import pandas as pd
+from ml_engine import ml_predict_label_from_features, record_frame, session_ctx
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -416,115 +410,6 @@ def set_detection_mode(mode: str):
     DETECTION_MODE = "ml" if str(mode).lower().startswith("ml") else "rules"
     print(f"[BACKEND] detection mode set to: {DETECTION_MODE}")
 
-_ML = {
-    "loaded": False,
-    "model": None,
-    "calibrator": None,
-    "decision_params": None,
-    "label_to_id": None,
-    "id_to_label": None,
-}
-
-def _load_ml_once(path = "models/posture_lgbm_classifier.pkl"):
-    #load trained LGBM
-    if _ML["loaded"]:
-        return
-    try:
-        bundle = joblib.load(path)
-        _ML["model"] = bundle.get("model")
-        _ML["calibrator"] = bundle.get("calibrator")      # may be None
-        _ML["decision_params"] = bundle.get("decision_params")  # may be None
-        _ML["label_to_id"] = bundle.get("label_to_id")
-        _ML["id_to_label"] = bundle.get("id_to_label")
-        _ML["loaded"] = True
-        print("[BACKEND] ML bundle loaded.")
-    except Exception as e:
-        print(f"[BACKEND] ML bundle load failed: {e}")
-        _ML["loaded"] = False
-
-def _apply_decision_layer(decision_params, logits):
-    eps     = decision_params["eps"]
-    alpha   = decision_params["alpha"]
-    beta    = decision_params["beta"]
-    tau     = decision_params["tau"]
-    biasmod = decision_params["bias_mod"]
-
-    new_logits = logits / tau
-    new_logits[:, 1] += biasmod
-    proba = _softmax(new_logits, axis=1)
-
-    C = np.array([
-        [0.0, 1 + alpha, 1.0],
-        [beta, 0.0, beta],
-        [1.0, 1 + alpha, 0.0]
-    ])
-
-    expected = proba @ C.T
-    y_argmin = expected.argmin(1)
-
-    close_to_top = (proba.max(1) - proba[:, 1] <= eps)
-    return np.where(close_to_top, 1, y_argmin)
-
-#one-step ML predictor from the current per-frame features
-def ml_predict_label_from_features(features_dict) -> str:
-    #use the trained model on the instant features you already compute per frame
-    #if calibrator+decision layer exist, use them else fall back to proba argmax
-
-    _load_ml_once()
-    if not _ML["loaded"] or _ML["model"] is None:
-        return features_dict.get("label", "good")  # fallback to current result
-    
-    # Model was trained on many engineered columns (means/std/etc)
-    # for live usage we approximate that by aggregating a few seconds of per-frame data (2 s smoothing window)
-    # this provides a pragmatic bridge between instantaneous inputs and the model’s expected short-term statistics
-    try:
-        #prefer feature_names if present in bundle 
-        model = _ML["model"]
-        calibrator = _ML.get("calibrator")
-        decision_params = _ML.get("decision_params")
-        feature_names = _ML.get("feature_names")
-
-        def to_float(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return 0.0
-            
-        if feature_names:
-            #try to use keys present order is not guaranteed—adapt as needed
-            row_dict = {fname: to_float(features_dict.get(fname, 0.0)) for fname in feature_names}
-            xrow = pd.DataFrame([row_dict], columns=feature_names)
-        else:
-            numeric_vals = [to_float(v) for v in features_dict.values() if isinstance(v, (int, float, np.floating))]
-            n_expected = getattr(model, "n_features_in_", len(numeric_vals))
-
-            if len(numeric_vals) < n_expected:
-                numeric_vals += [0.0] * (n_expected - len(numeric_vals))
-            elif len(numeric_vals) > n_expected:
-                numeric_vals = numeric_vals[:n_expected]
-            xrow = pd.DataFrame([numeric_vals])
-
-        if calibrator is not None and decision_params is not None:
-            # Use raw_score -> calibrator -> decision layer
-            logits = model.predict(xrow, raw_score=True)  #shape (1, 3)
-            cal_logits = calibrator.decision_function(logits)  #(1, 3) for multinomial LR
-            yhat = _apply_decision_layer(decision_params, cal_logits.reshape(1, -1))
-            cls_id = int(yhat[0])
-        else:
-            #no calibrator, use probabilities
-            if hasattr(model, "predict_proba"):
-                proba = model.predict_proba(xrow)
-            else:
-                logits = model.predict(xrow, raw_score=True)
-                proba = _softmax(logits, axis=1)
-            cls_id = int(np.argmax(proba, axis=1)[0])
-
-        #map id -> label string (bad/moderate/good)
-        id2lab = _ML.get("id_to_label") or {0: "bad", 1: "moderate", 2: "good"}
-        return id2lab.get(cls_id, "moderate")
-    except Exception as e:
-        print(f"[BACKEND] ML live predict failed: {e}")
-        return features_dict.get("label", "good")
 
 initialize_folders()
 pygame.init()
@@ -626,7 +511,6 @@ is_manual_labeling = False  # start in auto mode by default
 latest_voice_label = None  # To hold voice input while labeling mode is active
 latest_features = None
 label_override = "good"
-
 
 def reset_calibration_buffer():
     global calibration_data
@@ -753,9 +637,9 @@ def update_posture_stability(confidence_score, max_score=7):
 
 def get_posture_status(confidence_score, max_score=7):
     """Convert confidence score to simplified posture status"""
-    if confidence_score <= 1:
+    if confidence_score <= max(1, (max_score // 3) - max_score % 1):
         return "good"
-    elif confidence_score <= 3:
+    elif confidence_score <= max(2, (2 * max_score // 3) - max_score % 1):
         return "moderate"
     else:
         return "bad"
@@ -1168,52 +1052,72 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             normalized_head_tilt = abs(
                 raw_head_tilt - head_tilt_baseline)  # Remove baseline bias and use absolute value
 
-            # Head-specific metrics (only head position and tilt)
-            head_forward_score = scale_metric(facial_percentage, 0.08, 0.25, 3)  # Slightly more sensitive
-            head_tilt_score = scale_metric(normalized_head_tilt, 0.02, 0.08,
-                                           3)  # More sensitive with proper normalization
+            features = {
+                "head_tilt": normalized_head_tilt,
+                "clavicle_drop_pct": clavicle_y_pct,
+                "face_lean": face_lean,
+                "shoulder_ear_pct": shoulder_ear_percentage,
+                "torso_lean_pct": torso_percentage,
+                "looking_down_pct": looking_down_percentage,
+            }
 
-            # Looking down score using same scale_metric function
-            looking_down_score = scale_metric(looking_down_percentage, 0.40, 0.60, 4)  # 15%-40% change triggers penalty
+            if DETECTION_MODE == "rules":
+                # Head-specific metrics (only head position and tilt)
+                head_forward_score = scale_metric(facial_percentage, 0.08, 0.25, 3)  # Slightly more sensitive
+                head_tilt_score = scale_metric(normalized_head_tilt, 0.02, 0.08,
+                                               3)  # More sensitive with proper normalization
 
-            head_confidence_score = min(head_forward_score + head_tilt_score + looking_down_score, 7)
+                # Looking down score using same scale_metric function
+                looking_down_score = scale_metric(looking_down_percentage, 0.40, 0.60,
+                                                  4)  # 15%-40% change triggers penalty
 
-            # Debug head tilt when significant (now using Face Mesh cheeks)
-            if normalized_head_tilt > 0.03:
-                tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
-                landmark_source = "Face Mesh cheeks" if (
-                        left_cheek is not None and right_cheek is not None) else "Pose ears"
-                # print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
-                # f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
-                # f"Source: {landmark_source}, Score: {head_tilt_score}/3")
+                head_confidence_score = min(head_forward_score + head_tilt_score + looking_down_score, 7)
 
-            # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
-            torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)
-            shoulder_drop_score = scale_metric(shoulder_ear_percentage, 0.08, 0.20, 2)
+                # Debug head tilt when significant (now using Face Mesh cheeks)
+                if normalized_head_tilt > 0.03:
+                    tilt_direction_str = "LEFT" if raw_head_tilt > head_tilt_baseline else "RIGHT"
+                    landmark_source = "Face Mesh cheeks" if (
+                            left_cheek is not None and right_cheek is not None) else "Pose ears"
+                    # print(f"[HEAD TILT DEBUG] Raw: {raw_head_tilt:.4f}, Baseline: {head_tilt_baseline:.4f}, "
+                    # f"Normalized: {normalized_head_tilt:.4f}, Direction: {tilt_direction_str}, "
+                    # f"Source: {landmark_source}, Score: {head_tilt_score}/3")
 
-            # ENHANCED: Much more sensitive and weighted clavicle drop detection
-            posture_drop_score_pct = scale_metric(clavicle_y_pct, 0.005, 0.03, 4)  # Very sensitive: 0.5%-3%
-            posture_drop_score_abs = scale_metric(absolute_clavicle_drop, 0.01, 0.05, 4)  # Absolute threshold
-            # Take the maximum of both methods for best detection
-            posture_drop_score = min(max(posture_drop_score_pct, posture_drop_score_abs), 4)
+                # Body-specific metrics with ENHANCED clavicle Y-drop sensitivity
+                torso_lean_score = scale_metric(torso_percentage, 0.08, 0.25, 2)
+                shoulder_drop_score = scale_metric(shoulder_ear_percentage, 0.08, 0.20, 2)
 
-            body_alignment_score = scale_metric(height_percentage, 0.08, 0.20, 1)
+                # ENHANCED: Much more sensitive and weighted clavicle drop detection
+                posture_drop_score_pct = scale_metric(clavicle_y_pct, 0.005, 0.03, 4)  # Very sensitive: 0.5%-3%
+                posture_drop_score_abs = scale_metric(absolute_clavicle_drop, 0.01, 0.05, 4)  # Absolute threshold
+                # Take the maximum of both methods for best detection
+                posture_drop_score = min(max(posture_drop_score_pct, posture_drop_score_abs), 4)
 
-            # ENHANCED: Give clavicle drop much more weight in final calculation
-            body_confidence_score = min(
-                torso_lean_score + shoulder_drop_score + body_alignment_score + posture_drop_score, 7)
+                body_alignment_score = scale_metric(height_percentage, 0.08, 0.20, 1)
 
-            # Combine scores with clear weighting, but boost clavicle impact
-            base_combined = int((head_confidence_score * 0.5 + body_confidence_score * 0.5))
-            # Add extra penalty for significant posture drop
-            clavicle_penalty = min(posture_drop_score // 2, 2)  # 0-2 extra points for severe drops
-            combined_confidence = min(base_combined + clavicle_penalty, 7)
+                # ENHANCED: Give clavicle drop much more weight in final calculation
+                body_confidence_score = min(
+                    torso_lean_score + shoulder_drop_score + body_alignment_score + posture_drop_score, 7)
 
-            # Debug output for clavicle tracking
-            # if posture_drop_score > 1:
-            # print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
-            # f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
-            # f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
+                # Combine scores with clear weighting, but boost clavicle impact
+                base_combined = int((head_confidence_score * 0.5 + body_confidence_score * 0.5))
+                # Add extra penalty for significant posture drop
+                clavicle_penalty = min(posture_drop_score // 2, 2)  # 0-2 extra points for severe drops
+                combined_confidence = min(base_combined + clavicle_penalty, 7)
+
+                # Debug output for clavicle tracking
+                # if posture_drop_score > 1:
+                # print(f"[CLAVICLE DEBUG] Y-drop: {clavicle_y_pct:.3f} ({posture_drop_score_pct}/4), "
+                # f"Abs drop: {absolute_clavicle_drop:.3f} ({posture_drop_score_abs}/4), "
+                # f"Final drop score: {posture_drop_score}/4, Penalty: +{clavicle_penalty}")
+            else:
+
+                ml_label = ml_predict_label_from_features(features)
+                if session_ctx["proba"] is not None:
+                    proba = session_ctx["proba"]
+
+                    combined_confidence = (1.5 * proba[2]) + (4.0 * proba[1]) + (6.5 * proba[0])
+                else:
+                    combined_confidence = 0
 
             # Get simplified status using stability system
             stable_posture, display_status, is_transitioning = update_posture_stability(combined_confidence, 7)
@@ -1225,33 +1129,9 @@ def analyze_posture(image, pose_landmarks, face_landmarks=None):
             status = display_status
             color = posture_status_labels[stable_posture][1]
 
-            features = {
-                "head_tilt": normalized_head_tilt,
-                "clavicle_drop_pct": clavicle_y_pct,
-                "face_lean": face_lean,
-                "shoulder_ear_pct": shoulder_ear_percentage,
-                "torso_lean_pct": torso_percentage,
-                "looking_down_pct": looking_down_percentage,
-                "label": stable_posture if not is_manual_labeling else label_override
-            }
-            record_frame(features)
-            # print(f"[LOG] logged posture sample: {stable_posture}")
-
-             # optionally override with ML label
-            if DETECTION_MODE == "ml":
-                ml_label = ml_predict_label_from_features(features)
-                # Convert ML label 
-                if ml_label in posture_status_labels:
-                    status = posture_status_labels[ml_label][0]
-                    color = posture_status_labels[ml_label][1]
-                else:
-                    #fallback to current stable posture naming if unexpected label
-                    status = posture_status_labels[stable_posture][0]
-                    color = posture_status_labels[stable_posture][1]
-            else:
-                #keep your existing rule-based outcome
-                status = display_status
-                color = posture_status_labels[stable_posture][1]
+            status = posture_status_labels[stable_posture][0]
+            color = posture_status_labels[stable_posture][1]
+            features["label"] = stable_posture if not is_manual_labeling else label_override
 
             global latest_features
             latest_features = features.copy()
