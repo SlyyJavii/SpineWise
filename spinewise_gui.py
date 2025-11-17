@@ -26,14 +26,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy fix
-    # Seems to have helped here and there with minimizing crashes (It also now works on my machine?)
-    # Also, considering that having poll.py was not all that necessary due to its small size,
-    # did a dummy overhaul that should work much the same
-    # Honestly it's not even really an overhaul. Jason did great work initially, I just wanted to
-    # fix it so it wouldn't fight
-    # This is honestly going to be my focus for next sprint
-    # Because notification system sucked the life out of me.
+class GraphThread(QThread):
     finished = pyqtSignal()
     progress = pyqtSignal()
     update_plot = pyqtSignal()
@@ -49,31 +42,91 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
         self.prev = ""
         self.substring = ""
 
-        plt.style.use('bmh')
-        self.figure = Figure(figsize=(8, 4))
+        self.conf_line_color = "#2563EB"
+        self.conf_fill_color = "#BFDBFE"
+        self.head_line_color = "#10B981"
+        self.head_fill_color = "#A7F3D0"
+        self.axis_text_color = "#4B5563"
+        self.grid_color = "#E5E7EB"
+        
+        self.figure = Figure(figsize=(8, 2.6), tight_layout=True)
+        self.figure.patch.set_facecolor("none")
+
         self.canvas = FigureCanvas(self.figure)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setMinimumHeight(180)
+
         self.canvas.ax1 = self.figure.add_subplot(121)
         self.canvas.ax2 = self.figure.add_subplot(122)
+
         self.xdata = [0]
         self.ydata = [[0], [0]]
 
-        # additional file exception handling for stats.json file
+        self._configure_axes(
+            self.canvas.ax1,
+            title="Confidence trend",
+            xlabel="Sample",
+            ylabel="Confidence (0–7 scaled)",
+        )
+        self._configure_axes(
+            self.canvas.ax2,
+            title="Head tilt trend",
+            xlabel="Sample",
+            ylabel="Head tilt (normalized)",
+        )
+
         try:
-            with open ("stats.json", "r") as json_file:
+            with open("stats.json", "r") as json_file:
                 data = json.load(json_file)
                 self.currentTime = QTime.fromString(data['time'], "hh:mm:ss")
                 self.frequency = data['frequency']
-        except FileNotFoundError: 
-            with open ("stats.json", "w") as json_file:
-                json.dump({"day": datetime.datetime.now().day, "time": "00:00:00", "frequency": {}}, json_file)
+        except FileNotFoundError:
+            with open("stats.json", "w") as json_file:
+                json.dump(
+                    {
+                        "day": datetime.datetime.now().day,
+                        "time": "00:00:00",
+                        "frequency": {},
+                    },
+                    json_file,
+                )
             try:
-                size = os.path.getsize(self.file_path) 
+                size = os.path.getsize(self.file_path)
                 if len(self.frequency) == 0 and size > 0:
                     with open(self.file_path, "r") as temp:
                         key = (next(iter(temp)))[0:10]
                         self.frequency.update({key: ""})
-            except FileNotFoundError as e: 
+            except FileNotFoundError as e:
                 print(f"[ANALYTICS] Failed to read CSV: {e}")
+
+    def _configure_axes(self, ax, title, xlabel, ylabel):
+        """Apply a clean dashboard style to an axis."""
+        ax.set_title(title, fontsize=10, fontweight="semibold", pad=6, color=self.axis_text_color)
+        ax.set_xlabel(xlabel, fontsize=8, color=self.axis_text_color)
+        ax.set_ylabel(ylabel, fontsize=8, color=self.axis_text_color)
+
+        ax.set_facecolor("none")
+
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("bottom", "left"):
+            ax.spines[spine].set_linewidth(0.8)
+            ax.spines[spine].set_color("#D1D5DB")
+
+        ax.grid(
+            True,
+            axis="y",
+            linestyle="-",
+            linewidth=0.5,
+            alpha=0.7,
+            color=self.grid_color,
+        )
+
+        ax.tick_params(axis="both", labelsize=8, colors=self.axis_text_color)
+        ax.margins(x=0.02)
+        
+        ax.set_title(ax.get_title(), pad=3)
+        ax.tick_params(axis="y", pad=2) 
 
     def set_tab(self, index):
         self.tab_active = (index == 1)
@@ -129,31 +182,63 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
     def plot_on_main_thread(self):
         try:
             self.canvas.ax1.cla()
-            self.canvas.ax1.plot(self.xdata, self.ydata[0], marker='o', linewidth=1)
-            self.canvas.ax1.set_title("Confidence (0-7 scaled) over time")
-            self.canvas.ax1.set_xlabel("Sample")
-            self.canvas.ax1.set_ylabel("Confidence (0-7 scaled)")
-            self.canvas.ax1.grid(True)
+            x = self.xdata
+            y_conf = self.ydata[0]
 
+            self.canvas.ax1.fill_between(
+                x,
+                y_conf,
+                0,
+                alpha=0.25,
+                color=self.conf_fill_color,
+                linewidth=0,
+            )
+            self.canvas.ax1.plot(
+                x,
+                y_conf,
+                linewidth=2,
+                color=self.conf_line_color,
+            )
+            self._configure_axes(
+                self.canvas.ax1,
+                title="Confidence trend",
+                xlabel="Sample",
+                ylabel="Confidence (0–7 scaled)",
+            )
+
+            # --- Head tilt chart (area + line) ---
             self.canvas.ax2.cla()
-            self.canvas.ax2.plot(self.xdata, self.ydata[1], marker='o', linewidth=1)
-            self.canvas.ax2.set_title("Head tilt (normalized) over time")
-            self.canvas.ax2.set_xlabel("Sample")
-            self.canvas.ax2.set_ylabel("Head tilt (normalized)")
-            self.canvas.ax2.grid(True)
+            y_head = self.ydata[1]
+
+            self.canvas.ax2.fill_between(
+                x,
+                y_head,
+                0,
+                alpha=0.25,
+                color=self.head_fill_color,
+                linewidth=0,
+            )
+            self.canvas.ax2.plot(
+                x,
+                y_head,
+                linewidth=2,
+                color=self.head_line_color,
+            )
+            self._configure_axes(
+                self.canvas.ax2,
+                title="Head tilt trend",
+                xlabel="Sample",
+                ylabel="Head tilt (normalized)",
+            )
 
             self.figure.tight_layout()
             self.canvas.draw()
-            # Thankfully has stopped happening to me
-            # This used to keep occurring with the old version
-            # It may be machine dependent. Not sure. Not like it matters right now.
         except Exception as e:
             print(f"[ANALYTICS] uh oh! plot drawing failed!: {e}")
-    
-    # responsible for collecting mode of posture score associated with each day
+
     def most_frequent(self):
         if len(self.countList) > 0:
-            self.frequency.update({self.prev: max(set(self.countList), key = self.countList.count)})
+            self.frequency.update({self.prev: max(set(self.countList), key=self.countList.count)})
         data = {}
         with open("stats.json", "r") as json_file:
             data = json.load(json_file)
@@ -764,35 +849,61 @@ class App(QMainWindow):
 
     # analytics tab
     def init_analytics_tab(self):
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(16)
+
+        # Header
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+
         title = QLabel("Posture Analytics")
-        title.setFont(QFont("Press Start 2P", 14))
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        title.setFont(QFont("Inter", 16, QFont.Bold))
+        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        main_layout.addLayout(header_layout)
+
+        # Card that holds the charts + description
+        analytics_card = QFrame()
+        analytics_card.setObjectName("analyticsCard")
+        analytics_card.setStyleSheet(PRODUCT_CARD_QSS)
+        card_layout = QVBoxLayout(analytics_card)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+        card_layout.setSpacing(10)
+
+        # Graphs
         self.graph_thread = GraphThread()
-        layout.addWidget(self.graph_thread.canvas)
+        card_layout.addWidget(self.graph_thread.canvas)
 
+        # Description
+        desc = QLabel(
+            "Track your posture confidence and head tilt trends over time "
+            "to understand how your ergonomics are improving."
+        )
+        desc.setFont(QFont("Inter", 9))
+        desc.setWordWrap(True)
+        card_layout.addWidget(desc)
+
+        main_layout.addWidget(analytics_card)
+
+        # Thread wiring
         self.graph_thread.progress.connect(
             lambda: self.graph_thread.set_tab(self.tab_widget.currentIndex())
         )
         self.graph_thread.update_plot.connect(self.graph_thread.plot_on_main_thread)
 
+        # Existing stopwatch timer logic
         self.timer = QTimer()
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.update_stopwatch)
         self.timer.start()
 
         self.graph_thread.start()
-
         self.tab_widget.currentChanged.connect(self.graph_thread.set_tab)
 
-        desc = QLabel("This analytics panel will show posture metrics over time.")
-        desc.setFont(QFont("Press Start 2P", 9))
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        self.analytics_tab.setLayout(layout)
+        self.analytics_tab.setLayout(main_layout)
 
     # settings tab
     def init_settings_tab(self):
