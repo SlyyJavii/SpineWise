@@ -20,6 +20,7 @@ load_dotenv(find_dotenv(usecwd=True), override=True)
 
 _SERPAPI_KEY = os.getenv("SERPAPI_API_KEY") or os.environ.get("SERPAPI_API_KEY")
 
+
 def _get_serp_key():
     global _SERPAPI_KEY
     if not _SERPAPI_KEY:
@@ -27,34 +28,37 @@ def _get_serp_key():
         _SERPAPI_KEY = os.getenv("SERPAPI_API_KEY") or os.environ.get("SERPAPI_API_KEY")
     return _SERPAPI_KEY
 
-#globals for recommendations tab
+
+# globals for recommendations tab
 _reco_history = []
 _MAX_HISTORY = 30
 
-def _score_to_conf(smoothed_conf, max_score = 7.0):
-    #map confidence score from 0-7 to 0-1
+
+def _score_to_conf(smoothed_conf, max_score=7.0):
+    # map confidence score from 0-7 to 0-1
     try:
-        return max(0.0, min(1.0, float(smoothed_conf)/ max_score))
+        return max(0.0, min(1.0, float(smoothed_conf) / max_score))
     except Exception:
         return 0.0
+
 
 def _pick_pattern_from_features(f: dict, mode_hint: str = "front") -> tuple[str, list, dict]:
     # map live features as a simple pattern+tag+evidence
     if not f:
         return None, [], {}
-    
-    #default
+
+    # default
     pattern = None
     tags = []
     ev = {}
 
-    #using what analyze_posture already uses
+    # using what analyze_posture already uses
     head_tilt = float(f.get("head_tilt", 0.0))
     clav_drop = float(f.get("clavicle_drop_pct", 0.0))
     face_lean = float(f.get("face_lean", 0.0))
-    sh_ear   = float(f.get("shoulder_ear_pct", 0.0))
+    sh_ear = float(f.get("shoulder_ear_pct", 0.0))
     torso_ln = float(f.get("torso_lean_pct", 0.0))
-    look_dn  = float(f.get("looking_down_pct", 0.0))
+    look_dn = float(f.get("looking_down_pct", 0.0))
 
     ev.update({
         "head_tilt": head_tilt,
@@ -66,37 +70,55 @@ def _pick_pattern_from_features(f: dict, mode_hint: str = "front") -> tuple[str,
         "mode": mode_hint
     })
 
-    # tuning: make slouching pop up more easily
-    #added this because forward head was taking over might change in future this is good if shoulders are super upright
-    CLO_AVG_ONLY = 0.015   
-    CLO_WITH_TORSO = 0.005 
-    TORSO_MIN = 0.06       
+    if DETECTION_MODE == "rules":
+        # tuning: make slouching pop up more easily
+        # added this because forward head was taking over might change in future this is good if shoulders are super upright
+        CLO_AVG_ONLY = 0.015
+        CLO_WITH_TORSO = 0.005
+        TORSO_MIN = 0.06
 
-    #prefer slouched_sitting if clavicle dropped 
-    if mode_hint == "front":
-        if clav_drop >= CLO_AVG_ONLY or (clav_drop >= CLO_WITH_TORSO and torso_ln >= TORSO_MIN):
-            pattern = "slouched_sitting"
-            tags.extend(["posterior_pelvic_tilt", "foot_dangle"])
-            # subtle hints that often coincide with slouch
-            if torso_ln >= TORSO_MIN: tags.append("thoracic_flexion")
-            return pattern, list(sorted(set(tags))), ev
+        # prefer slouched_sitting if clavicle dropped
+        if mode_hint == "front":
+            if clav_drop >= CLO_AVG_ONLY or (clav_drop >= CLO_WITH_TORSO and torso_ln >= TORSO_MIN):
+                pattern = "slouched_sitting"
+                tags.extend(["posterior_pelvic_tilt", "foot_dangle"])
+                # subtle hints that often coincide with slouch
+                if torso_ln >= TORSO_MIN: tags.append("thoracic_flexion")
+                return pattern, list(sorted(set(tags))), ev
 
-    #rules
-    #forward head
-    if sh_ear >= 0.12 or face_lean >= 0.12 or look_dn >= 0.45:
-        pattern = "forward_head"
-        if look_dn >= 0.45:
-            tags.append("phone_neck")
-        if face_lean >= 0.12:
-            tags.append("cervical_flexion_bias")
-        tags.append("monitor_low")
+        # rules
+        # forward head
+        if sh_ear >= 0.12 or face_lean >= 0.12 or look_dn >= 0.45:
+            pattern = "forward_head"
+            if look_dn >= 0.45:
+                tags.append("phone_neck")
+            if face_lean >= 0.12:
+                tags.append("cervical_flexion_bias")
+            tags.append("monitor_low")
+    elif session_ctx["need_scores"] is not None:
+        need_scores = session_ctx["need_scores"]
+        need_list = [group for group in need_scores.keys()]
+        need_list.sort(key=lambda x: need_scores[x], reverse=True)
+        pattern = need_list[0]
+        need_cut = need_list[:2]
 
+        if "forward_head" in need_cut or "lateral_head_tilt" in need_cut:
+            if need_scores["forward_head"] > need_scores["lateral_head_tilt"]:
+                tags.append("phone_neck")
+            else:
+                tags.append("cervical_flexion_bias")
+        if "rounded_shoulders" in need_cut or "slouched_sitting" in need_cut:
+            if need_scores["rounded_shoulders"] > need_scores["slouched_sitting"]:
+                tags.append("posterior_pelvic_tilt")
+            else:
+                tags.append("thoracic_flexion")
 
-    #if nothing 
+    # if nothing
     return pattern, list(sorted(set(tags))), ev
 
+
 def get_recommendation_context():
-    #return a dict so gui can have recommendation, uses latest features and smoothed_confidence
+    # return a dict so gui can have recommendation, uses latest features and smoothed_confidence
     try:
         ctx = {"pattern": None, "confidence": None, "tags": [], "evidence": {}}
 
@@ -106,7 +128,7 @@ def get_recommendation_context():
 
         pat, tags, ev = _pick_pattern_from_features(f or {}, mode_hint=mode_hint)
         ctx.update({"pattern": pat, "confidence": conf, "tags": tags, "evidence": ev})
-        #record history
+        # record history
         if pat:
             _reco_history.append(pat)
             if len(_reco_history) > _MAX_HISTORY:
@@ -114,22 +136,25 @@ def get_recommendation_context():
         return ctx
     except Exception as e:
         print("[recs] get_recommendation_context failed:", e)
-        return {"pattern": None, "confidence": None, "tags":[], "evidence":{}}
-    
+        return {"pattern": None, "confidence": None, "tags": [], "evidence": {}}
+
+
 def get_posture_history():
     return list(_reco_history)
 
+
 def get_recommendation_references():
-    #expose calibration thresholds or baseline if we want GUI to have a "why" tab in recommendations
+    # expose calibration thresholds or baseline if we want GUI to have a "why" tab in recommendations
     try:
         return {
             "calibrated": bool(calibrated_thresholds),
             "mode": mode,
-            "grace_active": bool(calibration_end_time and (time.time() - calibration_end_time) < calibration_grace_period)
+            "grace_active": bool(
+                calibration_end_time and (time.time() - calibration_end_time) < calibration_grace_period)
         }
     except Exception:
         return {}
-    
+
 
 import os, time, json, re, requests
 from typing import List, Dict, Any, Optional
@@ -137,6 +162,7 @@ from typing import List, Dict, Any, Optional
 # SERPAPI CONFIG
 _SERP_CACHE: Dict[str, Any] = {}
 _SERP_CACHE_TTL = 60 * 30  # 30 min cache per unique query
+
 
 def _money_to_float(s: str) -> Optional[float]:
     if not s:
@@ -148,36 +174,48 @@ def _money_to_float(s: str) -> Optional[float]:
     except Exception:
         return None
 
+
 def _map_pattern_to_queries(pattern: Optional[str]) -> List[Dict[str, str]]:
-    #return a list of why category entries for a posture pattern
-    #you can change this part so that it searches for more things
+    # return a list of why category entries for a posture pattern
+    # you can change this part so that it searches for more things
     if pattern == "forward_head":
         return [
-            {"q": "monitor riser ergonomic", "why": "Raises screen to eye level to reduce cervical flexion.", "category": "Monitor Riser"},
-            {"q": "chin tuck posture trainer", "why": "Promotes deep neck flexor activation for forward head.", "category": "Posture Trainer"},
-            {"q": "laptop stand adjustable", "why": "Brings laptop screen up to neutral head posture.", "category": "Laptop Stand"},
+            {"q": "monitor riser ergonomic", "why": "Raises screen to eye level to reduce cervical flexion.",
+             "category": "Monitor Riser"},
+            {"q": "chin tuck posture trainer", "why": "Promotes deep neck flexor activation for forward head.",
+             "category": "Posture Trainer"},
+            {"q": "laptop stand adjustable", "why": "Brings laptop screen up to neutral head posture.",
+             "category": "Laptop Stand"},
         ]
     if pattern == "rounded_shoulders":
         return [
-            {"q": "resistance bands pull aparts", "why": "Strengthens scapular retractors; counters protraction.", "category": "Resistance Bands"},
-            {"q": "posture corrector brace", "why": "Gentle cueing to retract shoulders (use sparingly).", "category": "Posture Corrector"},
+            {"q": "resistance bands pull aparts", "why": "Strengthens scapular retractors; counters protraction.",
+             "category": "Resistance Bands"},
+            {"q": "posture corrector brace", "why": "Gentle cueing to retract shoulders (use sparingly).",
+             "category": "Posture Corrector"},
             {"q": "foam roller thoracic spine", "why": "Improves thoracic extension mobility.", "category": "Mobility"},
         ]
     if pattern == "slouched_sitting":
         return [
-            {"q": "lumbar support pillow chair", "why": "Supports neutral lumbar lordosis while seated.", "category": "Lumbar Support"},
-            {"q": "ergonomic footrest under desk", "why": "Lets feet plant fully; improves pelvic position.", "category": "Footrest"},
-            {"q": "seat cushion ergonomic", "why": "Encourages neutral pelvis/pressure distribution.", "category": "Seat Cushion"},
+            {"q": "lumbar support pillow chair", "why": "Supports neutral lumbar lordosis while seated.",
+             "category": "Lumbar Support"},
+            {"q": "ergonomic footrest under desk", "why": "Lets feet plant fully; improves pelvic position.",
+             "category": "Footrest"},
+            {"q": "seat cushion ergonomic", "why": "Encourages neutral pelvis/pressure distribution.",
+             "category": "Seat Cushion"},
         ]
     # default mixed suggestions if pattern unknown
     return [
-        {"q": "monitor riser ergonomic", "why": "Brings display to eye level to keep head neutral.", "category": "Monitor Riser"},
-        {"q": "lumbar support pillow chair", "why": "Supports neutral lumbar curve while sitting.", "category": "Lumbar Support"},
+        {"q": "monitor riser ergonomic", "why": "Brings display to eye level to keep head neutral.",
+         "category": "Monitor Riser"},
+        {"q": "lumbar support pillow chair", "why": "Supports neutral lumbar curve while sitting.",
+         "category": "Lumbar Support"},
         {"q": "resistance bands set", "why": "Quick mobility/strength micro-breaks.", "category": "Resistance Bands"},
     ]
 
+
 def _serp_shopping(query: str, num: int = 6) -> Dict[str, Any]:
-    #using SerpAPI Google Shopping with caching
+    # using SerpAPI Google Shopping with caching
     key = _get_serp_key()
     if not key:
         raise RuntimeError("Missing SERPAPI_API_KEY. Set it in your .env")
@@ -207,14 +245,18 @@ def _serp_shopping(query: str, num: int = 6) -> Dict[str, Any]:
     _SERP_CACHE[cache_key] = (now, data)
     return data
 
+
 from urllib.parse import urlparse
-#tried adding a favicon if theres no image but this favicon is super small so if theres another one replace it
+
+
+# tried adding a favicon if theres no image but this favicon is super small so if theres another one replace it
 def _favicon_from_link(url: str) -> str:
     try:
         d = urlparse(url).netloc
         return f"https://www.google.com/s2/favicons?domain={d}&sz=64" if d else ""
     except Exception:
         return ""
+
 
 def _parse_shopping_results(data: Dict[str, Any], category: str, why: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -244,7 +286,7 @@ def _parse_shopping_results(data: Dict[str, Any], category: str, why: str) -> Li
             "title": title,
             "category": category,
             "why": why,
-            "confidence": None,          
+            "confidence": None,
             "price_text": price_text,
             "rating": rating_str,
             "reviews": reviews_str,
@@ -253,16 +295,19 @@ def _parse_shopping_results(data: Dict[str, Any], category: str, why: str) -> Li
         })
     return out
 
+
 import math
 from collections import defaultdict
 
 TRUSTED_VENDORS = ("amazon.", "bestbuy.", "walmart.", "target.", "homedepot.", "lowes.")
+
 
 def _coerce_float(x, default=0.0):
     try:
         return float(x)
     except Exception:
         return default
+
 
 def _kw_boost(text: str, pattern: str, extra_focus: list[str]) -> float:
     text = (text or "").lower()
@@ -283,11 +328,13 @@ def _kw_boost(text: str, pattern: str, extra_focus: list[str]) -> float:
             boost += 0.25
     return boost
 
+
 def _vendor_boost(url: str) -> float:
     if not url:
         return 0.0
     u = url.lower()
     return 0.2 if any(v in u for v in TRUSTED_VENDORS) else 0.0
+
 
 def _score_item(it: dict, pattern: str, extra_focus: list[str]) -> float:
     """
@@ -299,8 +346,8 @@ def _score_item(it: dict, pattern: str, extra_focus: list[str]) -> float:
       - keyword match boost * up to ~1.5
       - vendor trust boost * 0.2
     """
-    rating = _coerce_float(it.get("rating") or 0.0)            
-    reviews = _coerce_float(it.get("reviews") or 0.0)           
+    rating = _coerce_float(it.get("rating") or 0.0)
+    reviews = _coerce_float(it.get("reviews") or 0.0)
     price = _money_to_float(it.get("price_text", "")) or 0.0
 
     # normalize components
@@ -309,17 +356,18 @@ def _score_item(it: dict, pattern: str, extra_focus: list[str]) -> float:
     # cheaper = higher; cap effect so price doesn't dominate
     price_score = (1.0 / (1.0 + price)) * 0.3
 
-    text = f'{it.get("title","")} {it.get("why","")}'
+    text = f'{it.get("title", "")} {it.get("why", "")}'
     kw_score = min(1.5, _kw_boost(text, pattern, extra_focus))
-    vendor_score = _vendor_boost(it.get("url",""))
+    vendor_score = _vendor_boost(it.get("url", ""))
 
     return rating_score + reviews_score + price_score + kw_score + vendor_score
 
+
 def _diversify_round_robin(scored: list[tuple[float, dict]], cap_per_cat=4, total_cap=12) -> list[dict]:
-    #this is mainly to keep variety, take the items sort within each category then pick in round robin order
+    # this is mainly to keep variety, take the items sort within each category then pick in round robin order
     by_cat: dict[str, list[tuple[float, dict]]] = defaultdict(list)
     for s, it in scored:
-        by_cat[it.get("category","Other")].append((s, it))
+        by_cat[it.get("category", "Other")].append((s, it))
 
     # sort each category by score desc
     for cat in by_cat:
@@ -347,15 +395,16 @@ def _diversify_round_robin(scored: list[tuple[float, dict]], cap_per_cat=4, tota
         idx += 1
     return out[:total_cap]
 
+
 def query_products_via_serpapi(
-    issues: List[str],
-    references: Dict[str, Any] = None,
-    extra_focus: List[str] = None,
-    budget: Optional[float] = None,
-    weights: Any = None
+        issues: List[str],
+        references: Dict[str, Any] = None,
+        extra_focus: List[str] = None,
+        budget: Optional[float] = None,
+        weights: Any = None
 ) -> List[Dict[str, Any]]:
-    #Picks a posture pattern, maps to Google Shopping queries, fetches results,
-    #applies budget, ranks smartly, and diversifies by category.
+    # Picks a posture pattern, maps to Google Shopping queries, fetches results,
+    # applies budget, ranks smartly, and diversifies by category.
     issues = issues or []
     KNOWN = ("forward_head", "slouched_sitting")
     known = [c for c in issues if c in KNOWN]
@@ -390,22 +439,25 @@ def query_products_via_serpapi(
             deduped.append(r)
 
     # rank
-    scored = [( _score_item(it, pattern, extra_focus or []), it ) for it in deduped]
+    scored = [(_score_item(it, pattern, extra_focus or []), it) for it in deduped]
 
     # diversify: max 4 per category, 12 total
     diversified = _diversify_round_robin(scored, cap_per_cat=4, total_cap=12)
 
     return diversified
 
+
 # Globals for settings hooks in relation to pygame
 notification_volume = 50  # Default volume (0-100)
 beep_interval = 2  # Default beep interval in seconds
 alert_duration = 10  # Default alert duration in seconds
 
-#detecton mode switch
+# detecton mode switch
 DETECTION_MODE = "rules"
+
+
 def set_detection_mode(mode: str):
-    #switch between logic and ml
+    # switch between logic and ml
     global DETECTION_MODE
     DETECTION_MODE = "ml" if str(mode).lower().startswith("ml") else "rules"
     print(f"[BACKEND] detection mode set to: {DETECTION_MODE}")
@@ -418,7 +470,7 @@ pygame.mixer.init()
 beep = pygame.mixer.Sound("bad_posture_alert.wav")
 beep.set_volume(notification_volume / 100.0)
 
-#globals for posture tracking
+# globals for posture tracking
 start_time = None
 loop_started = False
 last_beep_time = 0
@@ -511,6 +563,7 @@ is_manual_labeling = False  # start in auto mode by default
 latest_voice_label = None  # To hold voice input while labeling mode is active
 latest_features = None
 label_override = "good"
+
 
 def reset_calibration_buffer():
     global calibration_data

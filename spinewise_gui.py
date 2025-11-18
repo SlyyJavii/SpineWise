@@ -1,11 +1,13 @@
-import os, queue, cv2, csv, json, datetime, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, speech_recognition as sr
+import os, queue, cv2, csv, json, datetime, time, numpy as np, pandas as pd, mediapipe as mp, threading, backend, \
+    speech_recognition as sr
 from PyQt5.QtWidgets import (
     QLabel, QPushButton, QStackedWidget, QButtonGroup, QRadioButton, QSizePolicy, QFrame,
     QVBoxLayout, QWidget, QTabWidget, QMainWindow, QFileDialog, QTextEdit, QDoubleSpinBox,
     QScrollArea, QSpinBox, QHBoxLayout, QCheckBox, QFormLayout, QSlider, QGroupBox, QProgressBar,
     QTableWidgetItem, QTableWidget, QGridLayout, QHeaderView, QAction, QLineEdit
 )
-from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPainter, QColor
+from PyQt5.QtGui import QImage, QDesktopServices, QPixmap, QFont, QIcon, QFontDatabase, QPalette, QBrush, QPainter, \
+    QColor
 from PyQt5.QtCore import Qt, QUrl, QSize, QPropertyAnimation, QRect, QEasingCurve, QThread, pyqtSignal, QEvent, QTimer, \
     QObject, QTime
 
@@ -25,6 +27,7 @@ from voice_config import voice_config
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
 
 class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy fix
     # Seems to have helped here and there with minimizing crashes (It also now works on my machine?)
@@ -59,20 +62,20 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
 
         # additional file exception handling for stats.json file
         try:
-            with open ("stats.json", "r") as json_file:
+            with open("stats.json", "r") as json_file:
                 data = json.load(json_file)
                 self.currentTime = QTime.fromString(data['time'], "hh:mm:ss")
                 self.frequency = data['frequency']
-        except FileNotFoundError: 
-            with open ("stats.json", "w") as json_file:
+        except FileNotFoundError:
+            with open("stats.json", "w") as json_file:
                 json.dump({"day": datetime.datetime.now().day, "time": "00:00:00", "frequency": {}}, json_file)
             try:
-                size = os.path.getsize(self.file_path) 
+                size = os.path.getsize(self.file_path)
                 if len(self.frequency) == 0 and size > 0:
                     with open(self.file_path, "r") as temp:
                         key = (next(iter(temp)))[0:10]
                         self.frequency.update({key: ""})
-            except FileNotFoundError as e: 
+            except FileNotFoundError as e:
                 print(f"[ANALYTICS] Failed to read CSV: {e}")
 
     def set_tab(self, index):
@@ -149,11 +152,11 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
             # It may be machine dependent. Not sure. Not like it matters right now.
         except Exception as e:
             print(f"[ANALYTICS] uh oh! plot drawing failed!: {e}")
-    
+
     # responsible for collecting mode of posture score associated with each day
     def most_frequent(self):
         if len(self.countList) > 0:
-            self.frequency.update({self.prev: max(set(self.countList), key = self.countList.count)})
+            self.frequency.update({self.prev: max(set(self.countList), key=self.countList.count)})
         data = {}
         with open("stats.json", "r") as json_file:
             data = json.load(json_file)
@@ -163,6 +166,7 @@ class GraphThread(QThread):  # Tried changing from QObject to QThread as a dummy
 
     def stop(self):
         self.wait(2000)
+
 
 # speech thread
 class SpeechRecognitionThread(QThread):
@@ -243,12 +247,17 @@ class SpeechRecognitionThread(QThread):
         except Exception as e:
             self.status_update.emit(f"Mic init failed: {e}")
 
-    def enable_listening(self): self.listening_enabled = True
-    def disable_listening(self): self.listening_enabled = False
+    def enable_listening(self):
+        self.listening_enabled = True
+
+    def disable_listening(self):
+        self.listening_enabled = False
+
     def stop(self):
         self._run_flag = False
         self.listening_enabled = False
         self.wait()
+
 
 # video thread
 class VideoThread(QThread):
@@ -265,7 +274,8 @@ class VideoThread(QThread):
         self.processed_queue = None
         self.show_landmarks = show_landmarks
 
-    def set_landmark_visibility(self, show_landmarks): self.show_landmarks = show_landmarks
+    def set_landmark_visibility(self, show_landmarks):
+        self.show_landmarks = show_landmarks
 
     def process_image_queue(self):
         with self.pose_landmarker as pose_landmarker, self.face_landmarker as face_landmarker:
@@ -289,9 +299,9 @@ class VideoThread(QThread):
                     )
                     if result in ("good", "moderate", "bad"):
                         self.update_stats_signal.emit(result)
-                        #send reco context for recommendation tab
-                        ctx = get_recommendation_context()
-                        self.update_reco_context_signal.emit(ctx)
+                    # send reco context for recommendation tab
+                    ctx = get_recommendation_context()
+                    self.update_reco_context_signal.emit(ctx)
 
                 else:
                     self.update_stats_signal.emit("No pose detected")
@@ -324,11 +334,14 @@ class VideoThread(QThread):
     def stop(self):
         self._run_flag = False
 
+
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PyQt5.QtCore import QByteArray
 
+
 class ImageLoader(QObject):
     _instance = None
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -339,9 +352,11 @@ class ImageLoader(QObject):
 
     def fetch(self, url, on_ready):
         if not url:
-            on_ready(None); return
+            on_ready(None);
+            return
         if url in self.cache:
-            on_ready(self.cache[url]); return
+            on_ready(self.cache[url]);
+            return
         reply = self.nam.get(QNetworkRequest(QUrl(url)))
         reply.finished.connect(lambda r=reply, cb=on_ready, u=url: self._done(r, cb, u))
 
@@ -354,9 +369,11 @@ class ImageLoader(QObject):
         on_ready(self.cache[url])
         reply.deleteLater()
 
+
 # product card
 class ProductCard(QFrame):
-    def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, image_url = "", parent=None):
+    def __init__(self, title, category, why, price_text, rating=None, reviews=None, url=None, image_url="",
+                 parent=None):
         super().__init__(parent)
         self.url = (url or "").strip()
         self.setObjectName("ProductCard")
@@ -372,20 +389,33 @@ class ProductCard(QFrame):
         title_lbl.setWordWrap(True)
         pill = QLabel(category or "—")
         pill.setObjectName("Pill")
-        top = QHBoxLayout(); top.addWidget(title_lbl, 1); top.addWidget(pill, 0, Qt.AlignRight); v.addLayout(top)
-        why_lbl = QLabel(why or "—"); why_lbl.setObjectName("Why"); why_lbl.setWordWrap(True); v.addWidget(why_lbl)
+        top = QHBoxLayout();
+        top.addWidget(title_lbl, 1);
+        top.addWidget(pill, 0, Qt.AlignRight);
+        v.addLayout(top)
+        why_lbl = QLabel(why or "—");
+        why_lbl.setObjectName("Why");
+        why_lbl.setWordWrap(True);
+        v.addWidget(why_lbl)
         meta = [];
         if self.url:
             self.setCursor(Qt.PointingHandCursor)
         if rating: meta.append(f"⭐ {rating}")
         if reviews: meta.append(f"({reviews} reviews)")
-        meta_lbl = QLabel(" ".join(meta) if meta else " "); meta_lbl.setObjectName("Meta"); v.addWidget(meta_lbl)
+        meta_lbl = QLabel(" ".join(meta) if meta else " ");
+        meta_lbl.setObjectName("Meta");
+        v.addWidget(meta_lbl)
         bottom = QHBoxLayout()
-        price_lbl = QLabel(price_text or "—"); price_lbl.setObjectName("Price"); bottom.addWidget(price_lbl)
+        price_lbl = QLabel(price_text or "—");
+        price_lbl.setObjectName("Price");
+        bottom.addWidget(price_lbl)
         if url:
-            link = QLabel(f'<a href="{url}">Open</a>'); link.setOpenExternalLinks(True); bottom.addStretch(1); bottom.addWidget(link)
+            link = QLabel(f'<a href="{url}">Open</a>');
+            link.setOpenExternalLinks(True);
+            bottom.addStretch(1);
+            bottom.addWidget(link)
         v.addLayout(bottom)
-                # Load image async
+        # Load image async
         if image_url:
             ImageLoader().fetch(image_url, self._set_image)
 
@@ -400,6 +430,7 @@ class ProductCard(QFrame):
         else:
             self.img.setText("No image")
 
+
 class CoachCard(QFrame):
     def __init__(self, title, bullets=None, chips=None, confidence=None, parent=None):
         super().__init__(parent)
@@ -411,27 +442,32 @@ class CoachCard(QFrame):
             #Body { color:#2E3C51; }
             #Conf { color:#5A6B84; font-size:11px; }
         """)
-        v = QVBoxLayout(self); v.setContentsMargins(12,10,12,12); v.setSpacing(6)
+        v = QVBoxLayout(self);
+        v.setContentsMargins(12, 10, 12, 12);
+        v.setSpacing(6)
 
-        t = QLabel(title or "—"); t.setObjectName("Title")
+        t = QLabel(title or "—");
+        t.setObjectName("Title")
         v.addWidget(t)
 
         if chips:
             row = QHBoxLayout()
             for c in chips[:4]:
-                chip = QLabel(c); chip.setObjectName("Chip")
+                chip = QLabel(c);
+                chip.setObjectName("Chip")
                 row.addWidget(chip)
             row.addStretch(1)
             v.addLayout(row)
 
         if bullets:
             for b in bullets[:4]:
-                bl = QLabel("• " + b); bl.setObjectName("Body")
+                bl = QLabel("• " + b);
+                bl.setObjectName("Body")
                 v.addWidget(bl)
 
         if confidence is not None:
             v.addSpacing(4)
-            v.addWidget(QLabel(f"Confidence: {int(confidence*100)}%"), 0, Qt.AlignLeft)
+            v.addWidget(QLabel(f"Confidence: {int(confidence * 100)}%"), 0, Qt.AlignLeft)
 
 
 # main window
@@ -446,11 +482,21 @@ class App(QMainWindow):
         self.setStyleSheet(APP_QSS)
         self.app_font = QFont("Segoe UI", 10)
 
-        self.tab_widget = QTabWidget(); self.tab_widget.setElideMode(Qt.ElideRight)
-        main_layout = QVBoxLayout(); main_layout.setAlignment(Qt.AlignTop); main_layout.setContentsMargins(16,16,16,16); main_layout.addWidget(self.tab_widget)
-        central = QWidget(); central.setLayout(main_layout); self.setCentralWidget(central)
+        self.tab_widget = QTabWidget();
+        self.tab_widget.setElideMode(Qt.ElideRight)
+        main_layout = QVBoxLayout();
+        main_layout.setAlignment(Qt.AlignTop);
+        main_layout.setContentsMargins(16, 16, 16, 16);
+        main_layout.addWidget(self.tab_widget)
+        central = QWidget();
+        central.setLayout(main_layout);
+        self.setCentralWidget(central)
 
-        self.live_tab = QWidget(); self.analytics_tab = QWidget(); self.recommendations_tab = QWidget(); self.settings_tab = QWidget(); self.about_tab = QWidget()
+        self.live_tab = QWidget();
+        self.analytics_tab = QWidget();
+        self.recommendations_tab = QWidget();
+        self.settings_tab = QWidget();
+        self.about_tab = QWidget()
         self.tab_widget.addTab(self.live_tab, "Dashboard")
         self.tab_widget.addTab(self.analytics_tab, "Analytics")
         self.tab_widget.addTab(self.recommendations_tab, "Recommendations")
@@ -475,10 +521,9 @@ class App(QMainWindow):
         self.init_settings_tab()
         self.init_about_tab()
 
-        #recommendation tab
+        # recommendation tab
         self.current_reco_context = {"pattern": None, "confidence": None, "tags": [], "evidence": {}}
         self.video_thread.update_reco_context_signal.connect(self._on_reco_context)
-
 
         # default engine mode
         # Sets GUI dropdown and backend mode to rule based at startup
@@ -488,7 +533,8 @@ class App(QMainWindow):
         self.init_recommendations_tab()
         self.speech_thread.start()
 
-        #settings handler for engine switch
+        # settings handler for engine switch
+
     def _on_engine_changed(self, idx):
         mode = self.engine_combo.itemData(idx)
         try:
@@ -501,7 +547,7 @@ class App(QMainWindow):
         pat = ctx.get("pattern") or "—"
         conf = ctx.get("confidence")
         tags = ", ".join(ctx.get("tags") or []) or "—"
-        conf_txt = f"{int(conf*100)}%" if conf is not None else "—"
+        conf_txt = f"{int(conf * 100)}%" if conf is not None else "—"
         if hasattr(self, "ctx_summary"):
             self.ctx_summary.setText(f"Pattern: {pat}    Confidence: {conf_txt}    Tags: {tags}")
 
@@ -514,22 +560,23 @@ class App(QMainWindow):
         cards = []
         if pat == "forward_head":
             cards = [
-                ("Setup",    ["Raise monitor to eye level", "Keep keyboard close", "Sit close to desk"], ["monitor_low", "reach"]),
-                ("Exercises",["Chin tucks 3×10", "Wall slides 2×10", "Thoracic extension 2×10"], ["cervical"]),
-                ("Habits",   ["20–20–20 eye breaks", "Stand 5 min each hour"], ["phone_neck"])
+                ("Setup", ["Raise monitor to eye level", "Keep keyboard close", "Sit close to desk"],
+                 ["monitor_low", "reach"]),
+                ("Exercises", ["Chin tucks 3×10", "Wall slides 2×10", "Thoracic extension 2×10"], ["cervical"]),
+                ("Habits", ["20–20–20 eye breaks", "Stand 5 min each hour"], ["phone_neck"])
             ]
-        #rounded shoulders isnt currently being used
+        # rounded shoulders isnt currently being used
         elif pat == "rounded_shoulders":
             cards = [
-                ("Setup",    ["Elbows under shoulders", "Armrests just below elbows"], ["reach"]),
-                ("Exercises",["Doorway pec stretch 3×30s", "Band pull-aparts 3×15"], ["pec_short"]),
-                ("Habits",   ["Daily posture reset cue", "Light rows 2×/week"], [])
+                ("Setup", ["Elbows under shoulders", "Armrests just below elbows"], ["reach"]),
+                ("Exercises", ["Doorway pec stretch 3×30s", "Band pull-aparts 3×15"], ["pec_short"]),
+                ("Habits", ["Daily posture reset cue", "Light rows 2×/week"], [])
             ]
         elif pat == "slouched_sitting":
             cards = [
-                ("Setup",    ["Hips ≈ knees", "Feet fully supported", "Small lumbar support"], ["pelvis"]),
-                ("Exercises",["Brugger relief 3×/day", "Glute squeeze 3×10"], []),
-                ("Habits",   ["Stand for calls", "Micro-break timer"], [])
+                ("Setup", ["Hips ≈ knees", "Feet fully supported", "Small lumbar support"], ["pelvis"]),
+                ("Exercises", ["Brugger relief 3×/day", "Glute squeeze 3×10"], []),
+                ("Habits", ["Stand for calls", "Micro-break timer"], [])
             ]
         else:
             cards = [("Maintenance", ["Micro-breaks", "5-min mobility daily", "Alternate sit/stand"], [])]
@@ -537,8 +584,6 @@ class App(QMainWindow):
         for i, (title, bullets, chips) in enumerate(cards):
             r, c = divmod(i, 3)
             self.coach_grid.addWidget(CoachCard(title, bullets, chips, conf), r, c)
-
-
 
     def _on_reco_context(self, ctx: dict):
         self.current_reco_context = ctx or {"pattern": None, "confidence": None, "tags": [], "evidence": {}}
@@ -550,7 +595,7 @@ class App(QMainWindow):
         if hasattr(self, "reco_pattern_lbl"):
             self.reco_pattern_lbl.setText(f"Pattern: {pat}")
         if hasattr(self, "reco_conf_lbl"):
-            self.reco_conf_lbl.setText(f"Confidence: {'—' if conf is None else f'{int(conf*100)}%'}")
+            self.reco_conf_lbl.setText(f"Confidence: {'—' if conf is None else f'{int(conf * 100)}%'}")
         if hasattr(self, "reco_tags_lbl"):
             self.reco_tags_lbl.setText(f"Tags: {tags}")
 
@@ -585,9 +630,15 @@ class App(QMainWindow):
                 print("[RECS] CSV read failed:", path, e)
         if not products:
             products = [
-                {"title": "Memory Foam Neck Pillow", "category": "Neck Pillow", "why": "Supports cervical alignment during long sessions.", "confidence": None, "price_text": "$24.99", "rating": "4.5", "reviews": "12,345", "url": ""},
-                {"title": "Adjustable Posture Corrector", "category": "Posture Corrector", "why": "Gently retracts shoulders to counter slouching.", "confidence": None, "price_text": "$29.99", "rating": "4.3", "reviews": "8,901", "url": ""},
-                {"title": "Resistance Bands Set", "category": "Resistance Bands", "why": "Helps strengthen scapular stabilizers.", "confidence": None, "price_text": "$19.99", "rating": "4.6", "reviews": "22,101", "url": ""},
+                {"title": "Memory Foam Neck Pillow", "category": "Neck Pillow",
+                 "why": "Supports cervical alignment during long sessions.", "confidence": None, "price_text": "$24.99",
+                 "rating": "4.5", "reviews": "12,345", "url": ""},
+                {"title": "Adjustable Posture Corrector", "category": "Posture Corrector",
+                 "why": "Gently retracts shoulders to counter slouching.", "confidence": None, "price_text": "$29.99",
+                 "rating": "4.3", "reviews": "8,901", "url": ""},
+                {"title": "Resistance Bands Set", "category": "Resistance Bands",
+                 "why": "Helps strengthen scapular stabilizers.", "confidence": None, "price_text": "$19.99",
+                 "rating": "4.6", "reviews": "22,101", "url": ""},
             ]
         self._display_product_cards(products)
         self._populate_recs_table(products)
@@ -601,20 +652,25 @@ class App(QMainWindow):
             r, c = divmod(i, cols)
             card = ProductCard(
                 title=p.get("title"), category=p.get("category"), why=p.get("why"),
-                price_text=p.get("price_text"), rating=p.get("rating"), reviews=p.get("reviews"), url=p.get("url"), image_url=p.get("image_url", "")
+                price_text=p.get("price_text"), rating=p.get("rating"), reviews=p.get("reviews"), url=p.get("url"),
+                image_url=p.get("image_url", "")
             )
             self.product_grid.addWidget(card, r, c)
         self.product_grid.setRowStretch((len(products) + cols - 1) // cols + 1, 1)
-    
+
     def update_stopwatch(self):
         self.graph_thread.currentTime = self.graph_thread.currentTime.addMSecs(self.timer.interval())
 
     def init_recommendations_tab(self):
         self.recommendations_tab.setObjectName("RecsTab")
-        root = QWidget(); root.setObjectName("RecsRoot"); root.setStyleSheet(RECS_QSS)
-        outer = QVBoxLayout(root); outer.setContentsMargins(16,16,16,16); outer.setSpacing(14)
+        root = QWidget();
+        root.setObjectName("RecsRoot");
+        root.setStyleSheet(RECS_QSS)
+        outer = QVBoxLayout(root);
+        outer.setContentsMargins(16, 16, 16, 16);
+        outer.setSpacing(14)
 
-        #live coach might remove kind of trash updates very quickly 
+        # live coach might remove kind of trash updates very quickly
         coach_title = QLabel("Live Coach")
         coach_title.setProperty("class", "SectionTitle")
         coach_title.setAlignment(Qt.AlignLeft)
@@ -626,12 +682,12 @@ class App(QMainWindow):
 
         self.coach_container = QWidget()
         self.coach_grid = QGridLayout(self.coach_container)
-        self.coach_grid.setContentsMargins(0,0,0,0)
+        self.coach_grid.setContentsMargins(0, 0, 0, 0)
         self.coach_grid.setHorizontalSpacing(12)
         self.coach_grid.setVerticalSpacing(12)
         outer.addWidget(self.coach_container)
 
-        #products area
+        # products area
         cards_title = QLabel("Recommended Products")
         cards_title.setProperty("class", "SectionTitle")
         cards_title.setAlignment(Qt.AlignLeft)
@@ -639,34 +695,41 @@ class App(QMainWindow):
 
         tools = QHBoxLayout()
         refresh_btn = QPushButton("Refresh from CSV")
-        refresh_btn.setObjectName("Primary"); refresh_btn.setProperty("class", "Primary")
+        refresh_btn.setObjectName("Primary");
+        refresh_btn.setProperty("class", "Primary")
         refresh_btn.clicked.connect(self._on_refresh_products_from_csv)
-        tools.addWidget(refresh_btn, 0); tools.addStretch(1)
+        tools.addWidget(refresh_btn, 0);
+        tools.addStretch(1)
         outer.addLayout(tools)
 
         self.products_container = QWidget()
         self.product_grid = QGridLayout(self.products_container)
-        self.product_grid.setContentsMargins(0,0,0,0)
+        self.product_grid.setContentsMargins(0, 0, 0, 0)
         self.product_grid.setHorizontalSpacing(12)
         self.product_grid.setVerticalSpacing(12)
         outer.addWidget(self.products_container)
 
         controls_title = QLabel("Fine-tune & Export")
-        controls_title.setObjectName("SubTitle"); controls_title.setProperty("class", "SubTitle")
+        controls_title.setObjectName("SubTitle");
+        controls_title.setProperty("class", "SubTitle")
         outer.addWidget(controls_title)
 
         filters_row = QHBoxLayout()
         issue_lbl = QLabel("Focus issues:")
         self.issue_filter_input = QLineEdit()
         self.issue_filter_input.setPlaceholderText("e.g., forward head, rounded shoulders")
-        filters_row.addWidget(issue_lbl); filters_row.addWidget(self.issue_filter_input, 1)
+        filters_row.addWidget(issue_lbl);
+        filters_row.addWidget(self.issue_filter_input, 1)
         budget_lbl = QLabel("Budget:")
-        self.budget_input = QLineEdit(); self.budget_input.setPlaceholderText("Max $ (optional)")
+        self.budget_input = QLineEdit();
+        self.budget_input.setPlaceholderText("Max $ (optional)")
         self.budget_input.setFixedWidth(160)
-        filters_row.addWidget(budget_lbl); filters_row.addWidget(self.budget_input)
+        filters_row.addWidget(budget_lbl);
+        filters_row.addWidget(self.budget_input)
         outer.addLayout(filters_row)
 
-        self.recs_table = QTableWidget(); self.recs_table.setColumnCount(6)
+        self.recs_table = QTableWidget();
+        self.recs_table.setColumnCount(6)
         # more generic headers so tips/products both make sense
         self.recs_table.setHorizontalHeaderLabels(["Item", "Kind", "Details", "Confidence", "Price", "Link"])
         self.recs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -675,21 +738,27 @@ class App(QMainWindow):
 
         buttons = QHBoxLayout()
         generate_btn = QPushButton("Generate Recommendations")
-        generate_btn.setObjectName("Primary"); generate_btn.setProperty("class", "Primary")
+        generate_btn.setObjectName("Primary");
+        generate_btn.setProperty("class", "Primary")
         generate_btn.clicked.connect(self._on_generate_recommendations)
-        save_btn = QPushButton("Save as CSV"); save_btn.clicked.connect(self._on_save_recommendations_csv)
-        buttons.addWidget(generate_btn); buttons.addWidget(save_btn); buttons.addStretch(1)
+        save_btn = QPushButton("Save as CSV");
+        save_btn.clicked.connect(self._on_save_recommendations_csv)
+        buttons.addWidget(generate_btn);
+        buttons.addWidget(save_btn);
+        buttons.addStretch(1)
         outer.addLayout(buttons)
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(root)
-        main_layout = QVBoxLayout(); main_layout.addWidget(scroll)
+        scroll = QScrollArea();
+        scroll.setWidgetResizable(True);
+        scroll.setWidget(root)
+        main_layout = QVBoxLayout();
+        main_layout.addWidget(scroll)
         self.recommendations_tab.setLayout(main_layout)
 
         # initial content
         self._on_refresh_products_from_csv()
         # also render coach once with current (empty) context
         self._render_coach_from_context(self.current_reco_context)
-
 
     # live tab
     def init_live_tab(self):
@@ -796,16 +865,22 @@ class App(QMainWindow):
 
     # settings tab
     def init_settings_tab(self):
-        layout = QVBoxLayout(); layout.setSpacing(12)
+        layout = QVBoxLayout();
+        layout.setSpacing(12)
 
-        visual_group = QGroupBox("Visual Settings"); v_layout = QFormLayout()
-        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed"); self.landmark_checkbox.setChecked(self.show_landmarks); self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
+        visual_group = QGroupBox("Visual Settings");
+        v_layout = QFormLayout()
+        self.landmark_checkbox = QCheckBox("Show pose landmarks on camera feed");
+        self.landmark_checkbox.setChecked(self.show_landmarks);
+        self.landmark_checkbox.stateChanged.connect(self.toggle_landmark_visibility)
         v_layout.addRow(QLabel("Landmarks:"), self.landmark_checkbox)
-        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed"); landmark_info.setStyleSheet("color: #5A6B84;")
+        landmark_info = QLabel("When enabled, shows pose detection points and connections on the video feed");
+        landmark_info.setStyleSheet("color: #5A6B84;")
         v_layout.addRow("", landmark_info)
-        visual_group.setLayout(v_layout); layout.addWidget(visual_group)
+        visual_group.setLayout(v_layout);
+        layout.addWidget(visual_group)
 
-        #detection engine group
+        # detection engine group
         engine_group = QGroupBox("Detection Engine")
         e_layout = QFormLayout()
 
@@ -824,24 +899,38 @@ class App(QMainWindow):
         layout.addWidget(engine_group)
         #
 
-        notif_group = QGroupBox("Notification Settings"); n_layout = QFormLayout()
+        notif_group = QGroupBox("Notification Settings");
+        n_layout = QFormLayout()
         vol_row = QHBoxLayout()
-        self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0,100); self.volume_slider.setValue(self.notification_volume)
-        self.volume_slider.setTickPosition(QSlider.TicksBelow); self.volume_slider.setTickInterval(10)
+        self.volume_slider = QSlider(Qt.Horizontal);
+        self.volume_slider.setRange(0, 100);
+        self.volume_slider.setValue(self.notification_volume)
+        self.volume_slider.setTickPosition(QSlider.TicksBelow);
+        self.volume_slider.setTickInterval(10)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        self.volume_label = QLabel(f"{self.notification_volume}%"); self.volume_label.setFixedWidth(60)
-        vol_row.addWidget(self.volume_slider,1); vol_row.addWidget(self.volume_label,0,Qt.AlignRight)
+        self.volume_label = QLabel(f"{self.notification_volume}%");
+        self.volume_label.setFixedWidth(60)
+        vol_row.addWidget(self.volume_slider, 1);
+        vol_row.addWidget(self.volume_label, 0, Qt.AlignRight)
         n_layout.addRow(QLabel("Notification Volume:"), vol_row)
 
-        self.beep_interval_spinbox = QDoubleSpinBox(); self.beep_interval_spinbox.setRange(0.5,10.0); self.beep_interval_spinbox.setSingleStep(0.5)
-        self.beep_interval_spinbox.setValue(self.beep_interval); self.beep_interval_spinbox.setSuffix(" seconds"); self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
+        self.beep_interval_spinbox = QDoubleSpinBox();
+        self.beep_interval_spinbox.setRange(0.5, 10.0);
+        self.beep_interval_spinbox.setSingleStep(0.5)
+        self.beep_interval_spinbox.setValue(self.beep_interval);
+        self.beep_interval_spinbox.setSuffix(" seconds");
+        self.beep_interval_spinbox.valueChanged.connect(self._on_beep_interval_changed)
         n_layout.addRow(QLabel("Beep Interval:"), self.beep_interval_spinbox)
 
-        self.alert_duration_spinbox = QSpinBox(); self.alert_duration_spinbox.setRange(1,60); self.alert_duration_spinbox.setValue(int(self.alert_duration))
-        self.alert_duration_spinbox.setSuffix(" seconds"); self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
+        self.alert_duration_spinbox = QSpinBox();
+        self.alert_duration_spinbox.setRange(1, 60);
+        self.alert_duration_spinbox.setValue(int(self.alert_duration))
+        self.alert_duration_spinbox.setSuffix(" seconds");
+        self.alert_duration_spinbox.valueChanged.connect(self._on_alert_duration_changed)
         n_layout.addRow(QLabel("Alert Duration:"), self.alert_duration_spinbox)
 
-        notif_group.setLayout(n_layout); layout.addWidget(notif_group)
+        notif_group.setLayout(n_layout);
+        layout.addWidget(notif_group)
 
         voice_group = QGroupBox("Voice Control Settings")
         voice_layout = QFormLayout()
@@ -954,11 +1043,11 @@ class App(QMainWindow):
         clear_log_button.setStyleSheet("padding: 6px 12px; font-size: 11px;")
         data_btn_layout.addWidget(clear_log_button)
 
-        #data_layout.addRow("Actions:", data_btn_layout)
+        # data_layout.addRow("Actions:", data_btn_layout)
 
-        #data_info = QLabel("Export your posture data to CSV format or clear all logged data")
-        #data_info.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
-        #data_layout.addRow("", data_info)
+        # data_info = QLabel("Export your posture data to CSV format or clear all logged data")
+        # data_info.setStyleSheet("font-size: 10px; color: #666; font-style: italic;")
+        # data_layout.addRow("", data_info)
 
         export_voice_btn = QPushButton("📤 Export Voice Settings")
         export_voice_btn.clicked.connect(self._export_voice_settings)
@@ -978,9 +1067,14 @@ class App(QMainWindow):
         data_group.setLayout(data_layout)
         layout.addWidget(data_group)
 
-        settings_inner = QWidget(); settings_inner.setLayout(layout)
-        settings_scroll = QScrollArea(); settings_scroll.setWidgetResizable(True); settings_scroll.setWidget(settings_inner)
-        outer = QVBoxLayout(); outer.addWidget(settings_scroll); self.settings_tab.setLayout(outer)
+        settings_inner = QWidget();
+        settings_inner.setLayout(layout)
+        settings_scroll = QScrollArea();
+        settings_scroll.setWidgetResizable(True);
+        settings_scroll.setWidget(settings_inner)
+        outer = QVBoxLayout();
+        outer.addWidget(settings_scroll);
+        self.settings_tab.setLayout(outer)
 
     def init_about_tab(self):
         container = QWidget()
@@ -1117,7 +1211,7 @@ class App(QMainWindow):
         layout.addWidget(scroll);
         self.about_tab.setLayout(layout)
 
-#main code when clicking generate recommendation
+    # main code when clicking generate recommendation
     def _on_generate_recommendations(self):
         if getattr(self, "_recs_busy", False):
             return
@@ -1128,10 +1222,10 @@ class App(QMainWindow):
     # recs logic
     def _generate_recommendations_inner(self):
         try:
-            #Live context
-            ctx  = getattr(self, "current_reco_context",
-                        {"pattern": None, "confidence": None, "tags": [], "evidence": {}})
-            pat  = ctx.get("pattern")
+            # Live context
+            ctx = getattr(self, "current_reco_context",
+                          {"pattern": None, "confidence": None, "tags": [], "evidence": {}})
+            pat = ctx.get("pattern")
             conf = ctx.get("confidence")
 
             # Context aware coach tip always prepended so the table isn't empty
@@ -1158,9 +1252,9 @@ class App(QMainWindow):
                 }]
 
             # product lookup
-            references      = getattr(backend, "get_recommendation_references", lambda: {})()
+            references = getattr(backend, "get_recommendation_references", lambda: {})()
 
-            focus_text  = (self.issue_filter_input.text() or "").strip()
+            focus_text = (self.issue_filter_input.text() or "").strip()
             extra_focus = [s.strip() for s in focus_text.split(",") if s.strip()]
 
             budget_raw = (self.budget_input.text() or "").strip()
@@ -1169,8 +1263,10 @@ class App(QMainWindow):
             except ValueError:
                 budget = None
 
-            # build issues user focus > live pattern 
-            def _norm(s): return s.lower().replace(" ", "_")
+            # build issues user focus > live pattern
+            def _norm(s):
+                return s.lower().replace(" ", "_")
+
             KNOWN = {"forward_head", "slouched_sitting"}  # shoulders removed for now
 
             issues = [_norm(s) for s in (extra_focus or []) if _norm(s) in KNOWN]
@@ -1178,17 +1274,17 @@ class App(QMainWindow):
             # only trust live pattern if confident enough
             if not issues and pat in KNOWN and (conf is None or conf >= 0.5):
                 issues = [pat]
-             
+
             # if still nothing, we pass [] to backend it will use mixed base-case queries
             if not issues:
                 issues = []
 
             results = getattr(backend, "query_products_via_serpapi", lambda *a, **k: [])(
-            issues=issues,
-            references=references,
-            extra_focus=extra_focus,
-            budget=budget,
-            weights=None
+                issues=issues,
+                references=references,
+                extra_focus=extra_focus,
+                budget=budget,
+                weights=None
             )
 
             # render
@@ -1205,8 +1301,6 @@ class App(QMainWindow):
         finally:
             self._recs_busy = False
 
-
-
     def _populate_recs_table(self, items):
         self.recs_table.setRowCount(0)
 
@@ -1218,33 +1312,35 @@ class App(QMainWindow):
         self.recs_table.setRowCount(len(items))
         for r, p in enumerate(items):
             title = p.get("title", "—")
-            kind  = p.get("category", "—")
-            why   = p.get("why", "—")
-            conf  = p.get("confidence", None)
+            kind = p.get("category", "—")
+            why = p.get("why", "—")
+            conf = p.get("confidence", None)
             price = p.get("price_text", "—")
-            url   = p.get("url", "")
+            url = p.get("url", "")
 
             self.recs_table.setItem(r, 0, QTableWidgetItem(title))
             self.recs_table.setItem(r, 1, QTableWidgetItem(kind))
             self.recs_table.setItem(r, 2, QTableWidgetItem(why))
-            conf_display = "—" if conf is None else f"{round(float(conf)*100):d}%"
+            conf_display = "—" if conf is None else f"{round(float(conf) * 100):d}%"
             self.recs_table.setItem(r, 3, QTableWidgetItem(conf_display))
             self.recs_table.setItem(r, 4, QTableWidgetItem(price))
             self.recs_table.setItem(r, 5, QTableWidgetItem(url if url else "—"))
 
-
     def _on_save_recommendations_csv(self):
         try:
-            dest, _ = QFileDialog.getSaveFileName(self, "Save Recommendations", "recommendations.csv", "CSV Files (*.csv)")
+            dest, _ = QFileDialog.getSaveFileName(self, "Save Recommendations", "recommendations.csv",
+                                                  "CSV Files (*.csv)")
             if not dest: return
             import csv
             cols = [self.recs_table.horizontalHeaderItem(i).text() for i in range(self.recs_table.columnCount())]
             with open(dest, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f); writer.writerow(cols)
+                writer = csv.writer(f);
+                writer.writerow(cols)
                 for r in range(self.recs_table.rowCount()):
                     row = []
                     for c in range(self.recs_table.columnCount()):
-                        item = self.recs_table.item(r, c); row.append(item.text() if item else "")
+                        item = self.recs_table.item(r, c);
+                        row.append(item.text() if item else "")
                     writer.writerow(row)
             self.set_status_detail("Saved recommendations to CSV.")
         except Exception as e:
@@ -1258,13 +1354,17 @@ class App(QMainWindow):
         self.set_status_detail("Landmarks enabled" if self.show_landmarks else "Landmarks disabled")
 
     def _on_volume_changed(self, value):
-        self.notification_volume = value; self.volume_label.setText(f"{value}%"); backend.update_notification_volume(value)
+        self.notification_volume = value;
+        self.volume_label.setText(f"{value}%");
+        backend.update_notification_volume(value)
 
     def _on_beep_interval_changed(self, value):
-        self.beep_interval = value; backend.update_beep_interval(value)
+        self.beep_interval = value;
+        backend.update_beep_interval(value)
 
     def _on_alert_duration_changed(self, value):
-        self.alert_duration = value; backend.update_alert_duration(value)
+        self.alert_duration = value;
+        backend.update_alert_duration(value)
 
     # voice
     def toggle_voice_recognition(self, state):
@@ -1385,7 +1485,6 @@ class App(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-
             voice_config.config["commands"] = voice_config.DEFAULT_CONFIG["commands"].copy()
             voice_config.save_config()
 
@@ -1540,9 +1639,12 @@ class App(QMainWindow):
     def clear_log(self):
         try:
             if os.path.exists("posture_trend_log.csv"):
-                os.remove("posture_trend_log.csv"); self.log_table.setRowCount(1); self.log_table.setItem(0,0,QTableWidgetItem("🗑️ Log data cleared."))
+                os.remove("posture_trend_log.csv");
+                self.log_table.setRowCount(1);
+                self.log_table.setItem(0, 0, QTableWidgetItem("🗑️ Log data cleared."))
             else:
-                self.log_table.setRowCount(1); self.log_table.setItem(0,0,QTableWidgetItem("📂 No log file to clear."))
+                self.log_table.setRowCount(1);
+                self.log_table.setItem(0, 0, QTableWidgetItem("📂 No log file to clear."))
         except Exception as e:
             print("[ERROR] clear_log:", e)
 
@@ -1551,7 +1653,8 @@ class App(QMainWindow):
             dest, _ = QFileDialog.getSaveFileName(self, "Save Log", "posture_trend_log.csv", "CSV Files (*.csv)")
             if dest:
                 try:
-                    with open("posture_trend_log.csv", "r") as src, open(dest, "w") as dst: dst.write(src.read())
+                    with open("posture_trend_log.csv", "r") as src, open(dest, "w") as dst:
+                        dst.write(src.read())
                     self.set_status_detail("Log exported.")
                 except Exception as e:
                     self.set_status_detail(f"Export failed: {e}")
@@ -1561,14 +1664,17 @@ class App(QMainWindow):
     # camera control
     def start_video(self):
         if self.video_thread and self.video_thread.isRunning():
-            self.video_thread._run_flag = False; self.video_thread.wait(1000)
+            self.video_thread._run_flag = False;
+            self.video_thread.wait(1000)
         self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
         self.video_thread.update_reco_context_signal.connect(self._on_reco_context)
         self.video_thread.start()
-        self.start_button.setEnabled(False); self.stop_button.setEnabled(True)
-        self.image_label.setMinimumSize(800,480); self.image_label.setText("")
+        self.start_button.setEnabled(False);
+        self.stop_button.setEnabled(True)
+        self.image_label.setMinimumSize(800, 480);
+        self.image_label.setText("")
         self.set_status("Monitoring Posture...", "Camera starting...", style_kind="monitor")
 
     def stop_video(self):
@@ -1586,13 +1692,17 @@ class App(QMainWindow):
 
     def force_video_stop(self):
         if self.video_thread and self.video_thread.isRunning():
-            try: self.video_thread.terminate()
-            except Exception: pass
+            try:
+                self.video_thread.terminate()
+            except Exception:
+                pass
         self.update_ui_after_stop()
 
     def update_ui_after_stop(self):
-        self.start_button.setEnabled(True); self.stop_button.setEnabled(False)
-        self.image_label.setText("Click 'Start Camera' to begin webcam feed"); self.image_label.clear()
+        self.start_button.setEnabled(True);
+        self.stop_button.setEnabled(False)
+        self.image_label.setText("Click 'Start Camera' to begin webcam feed");
+        self.image_label.clear()
         self.set_status("Camera Stopped", "⏹️ Camera stopped - App is running", style_kind="stopped")
 
     def check_app_status(self):
@@ -1619,7 +1729,8 @@ class App(QMainWindow):
         self.image_label.setPixmap(scaled)
 
     def update_stats(self, text):
-        if text and not any(w in text.lower() for w in ["detecting","stabilizing","transitioning","confirming","analyzing"]):
+        if text and not any(
+                w in text.lower() for w in ["detecting", "stabilizing", "transitioning", "confirming", "analyzing"]):
             tl = text.lower()
             if "good posture" in tl:
                 self.set_status("Good Posture", f"Analysis: {text}", style_kind="good")
@@ -1635,7 +1746,7 @@ class App(QMainWindow):
             self.set_status_detail(f"Analysis: {text}")
 
     def closeEvent(self, event):
-        
+
         if self.video_thread.isRunning(): self.video_thread.stop()
         if self.speech_thread.isRunning(): self.speech_thread.stop()
 
@@ -1651,13 +1762,15 @@ class App(QMainWindow):
         data['time'] = timestamp
         with open("stats.json", "w") as json_file:
             json.dump(data, json_file)
-        
+
         if self.graph_thread.isRunning(): self.graph_thread.stop()
         event.accept()
+
 
 if __name__ == '__main__':
     import sys
     from PyQt5.QtWidgets import QApplication
+
     app = QApplication(sys.argv)
     window = App()
     window.show()
