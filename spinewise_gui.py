@@ -720,7 +720,7 @@ class App(QMainWindow):
         self.tab_widget.addTab(self.recommendations_tab, "Recommendations")
         self.tab_widget.addTab(self.settings_tab, "Settings")
         self.tab_widget.addTab(self.about_tab, "About Us")
-        self.slider_label = QLabel("Selected Time: 0")
+        self.slider_label = QLabel("Selected Time Since First Activation: 0")
 
         self.show_landmarks = False
         self.video_thread = VideoThread()
@@ -881,7 +881,7 @@ class App(QMainWindow):
         self.graph_thread.totalTime = self.graph_thread.totalTime.addMSecs(self.timer.interval())
     
     def update_slider(self, value):
-        self.slider_label.setText(f"Selected Time: {value}")
+        self.slider_label.setText(f"Selected Time Since First Activation: {value}")
 
     def init_recommendations_tab(self):
         self.recommendations_tab.setObjectName("RecsTab")
@@ -2558,4 +2558,5 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = App()
     window.show()
+
     sys.exit(app.exec_())
