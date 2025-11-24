@@ -720,6 +720,7 @@ class App(QMainWindow):
         self.tab_widget.addTab(self.recommendations_tab, "Recommendations")
         self.tab_widget.addTab(self.settings_tab, "Settings")
         self.tab_widget.addTab(self.about_tab, "About Us")
+        self.slider_label = QLabel("Selected Time: 0")
 
         self.show_landmarks = False
         self.video_thread = VideoThread()
@@ -878,6 +879,9 @@ class App(QMainWindow):
     def update_stopwatch(self):
         self.graph_thread.currentTime = self.graph_thread.currentTime.addMSecs(self.timer.interval())
         self.graph_thread.totalTime = self.graph_thread.totalTime.addMSecs(self.timer.interval())
+    
+    def update_slider(self, value):
+        self.slider_label.setText(f"Selected Time: {value}")
 
     def init_recommendations_tab(self):
         self.recommendations_tab.setObjectName("RecsTab")
@@ -1270,11 +1274,15 @@ class App(QMainWindow):
         slider.setMinimum(0)
         slider.setSingleStep(3)
         slider.valueChanged.connect(self.graph_thread.set_xlimits)
+        slider.valueChanged.connect(self.update_slider)
+        graphs_layout.addWidget(self.slider_label)
         graphs_layout.addWidget(slider)
 
+        interval_label = QLabel(f"Specify Interval of Time")
         intervalSpinBox = QSpinBox()
         intervalSpinBox.setMinimum(5)
         intervalSpinBox.valueChanged.connect(self.graph_thread.set_interval)
+        graphs_layout.addWidget(interval_label)
         graphs_layout.addWidget(intervalSpinBox)
 
         reset_view = QPushButton("↻ Reset View")
