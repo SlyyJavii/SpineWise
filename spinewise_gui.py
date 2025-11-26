@@ -152,6 +152,8 @@ class GraphThread(QThread):
         ax.set_title(ax.get_title(), pad=3)
         ax.tick_params(axis="y", pad=2)
 
+    # If the user interacts with the slider, xmin and xmax are adjusted appropriately based on the slider value and the interval value.
+    # E.g., slider value of 5 represents starting at x = 5, and interval value of 3 represents the graph ending at x = 8
     def set_xlimits(self, val):
         # self.default is a boolean value that makes sure the default view is the regular xmin and xmax
         if self.default is False:
@@ -162,9 +164,10 @@ class GraphThread(QThread):
     def set_interval(self, val):
         self.interval = val
 
+    # Responsible for keeping track of whether the analytics tab is selected
     def set_tab(self, index):
         self.tab_active = (index == 1)
-
+    
     def run(self):
         while self.isRunning():
             if self.tab_active:
@@ -190,6 +193,7 @@ class GraphThread(QThread):
 
         self.finished.emit()
 
+    # Responsible for polling any updates to the csv file
     def read_new_data_incrementally(self):
         if not os.path.exists(self.file_path):
             return
@@ -216,6 +220,7 @@ class GraphThread(QThread):
                             else:
                                 self.colors.append(self.moderate_color)
 
+                            # Keeps track of most frequent posture label
                             if (self.prev != "" and self.substring != self.prev):
                                 self.most_frequent()
                                 self.countList.clear()
@@ -1259,7 +1264,7 @@ class App(QMainWindow):
         )
         self.graph_thread.update_plot.connect(self.graph_thread.plot_on_main_thread)
 
-        # Placed initilization of GraphThread on top b/c
+        # Placed initilization of GraphThread here
         # Slider and SpinBox max values rely on GraphThread's variables
         # More convienent in contrast to initilizating max values and then changing them later
         # Responsible for setting max values for slider and spin box
@@ -2560,3 +2565,4 @@ if __name__ == '__main__':
     window.show()
 
     sys.exit(app.exec_())
+
