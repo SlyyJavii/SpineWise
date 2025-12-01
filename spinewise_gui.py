@@ -50,7 +50,7 @@ class GraphThread(QThread):
         self.currentTime = self.totalTime = QTime(0, 0, 0, 0)
         self.frequency = {}
         self.countList = []
-        self.prev = self.subsring = ""
+        self.prev = self.substring = ""
         self.streak = self.file_position = self.index = self.currentDay = self.xmin = self.xmax = self.intervalMax = 0
         self.avg_counter = 1
         self.interval = 6
@@ -2565,4 +2565,5 @@ if __name__ == '__main__':
     window.show()
 
     sys.exit(app.exec_())
+
 
