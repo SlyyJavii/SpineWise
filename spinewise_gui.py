@@ -1879,26 +1879,29 @@ class App(QMainWindow):
         outer.addWidget(self.carousel_widget)
 
         devs_info = [
-            ("Emdya Permuy-Llovio ", "Product Manager", "assets/dev1.png", "https://www.linkedin.com/in/emdyapermuy/",
+            ("Emdya Permuy-Llovio ", "Product Manager (Capstone 1)", "assets/dev1.png", "https://www.linkedin.com/in/emdyapermuy/",
              "https://github.com/Emdya"),
-            ("Juan Mieses", "Fullstack Development ", "assets/dev2.png", "https://www.linkedin.com/in/juanmieses003/",
+            ("Juan Mieses", "Fullstack Development, Project Manager (Capstone 2) ", "assets/dev2.png", "https://www.linkedin.com/in/juanmieses003/",
              "https://github.com/Jmies-27"),
             ("Javier Brasil", "Fullstack Development", "assets/dev3.png",
              "https://www.linkedin.com/in/javier-a-brasil/", "https://github.com/SlyyJavii"),
-            ("John Pena ", "Backend and Machine Learning Development", "assets/dev4.png",
+            ("John Pena", "Backend and Machine Learning Development", "assets/dev4.png",
              "https://www.linkedin.com/in/johnpenacs/", "https://github.com/jpena173"),
             ("Jake Rodriguez", "Visual and Audio Alert System", "assets/dev5.png",
              "https://www.linkedin.com/in/jake-rodriguez-917a24142/", "https://github.com/jrodr995"),
             ("Oleh Krainyk", "UI Development", "assets/dev6.jpg", "https://www.linkedin.com/in/oleh-krainyk/",
+             "https://github.com/olegKrainyk"),
+            ("Jason Pena", "Data Analyst", "assets/dev7.jpg", "https://www.linkedin.com/in/oleh-krainyk/",
              "https://github.com/olegKrainyk")
         ]
         captions = [
-            "Emdya Permuy-Llovio is an Undergraduate BS in Computer Science student at Florida International University... ",
-            "Juan A. Mieses is a Florida International University Undergraduate student pursuing a Bachelor's Degree... ",
-            "Javier builds solid infrastructure and efficient code.",
-            "John Pena is an aspiring undergraduate studying Computer Science, preferring cybersecurity tasks and backend development...",
-            "Jake crafts beautiful alert systems and UI animations.",
-            "Oleh Krainyk is a UI developer with a passion for creating intuitive and engaging user experiences."
+            "Emdya Permuy-Llovio is an Undergraduate BS in Computer Science student at Florida International University, who is planning on specializing in AI Global Policy and Machine Learning Programming. She intends to pursue graduate studies and acquire a PhD in Machine Learning. Emdya has published her own Java programming introduction textbook in her freshman year of University, grown a following in the tech field with 6,000 followers on LinkedIn, published a Chrome extension to help students manage their stress levels during finals week, and attended various programming-related events such as hackathons and conferences across the world.",
+            "Juan A. Mieses is a Florida International University Undergraduate student pursuing a Bachelor's Degree of Science in Computer Science, tackling ethical approaches to fullstack development and programming, with an interest in game development and writing fiction. In charge of frontend and UI/UX choices within SpineWise, this is the first time he's worked extensively with frontend rather than backend, utilizing this opportunity to diversify his skillset and give input on a project with a tangibly beneficial impact. As of Capstone 2, he is now the project's product manager, overseeing and ensuring quality.",
+            "Javier Brasil builds solid infrastructure and efficient code.",
+            "John Pena is an aspiring undergraduate studying Computer Science, preferring cybersecurity tasks and backend development with both high-level and low-level languages.",
+            "Jake Rodriguez crafts beautiful alert systems and UI animations.",
+            "Oleh Krainyk is a UI developer with a passion for creating intuitive and engaging user experiences.",
+            "Jason Pena is a UI developer and a data analyst creating user-friendly displays for analytics."
         ]
 
         for idx, (name, role, img_path, linkedin, github) in enumerate(devs_info):
@@ -2565,5 +2568,6 @@ if __name__ == '__main__':
     window.show()
 
     sys.exit(app.exec_())
+
 
 
