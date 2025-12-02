@@ -28,9 +28,9 @@ py -m venv .venv
 - Activate virtual environment
 ```
 # MacOS and Linux only
-source .venv/Scripts/activate
+source .venv/bin/activate
 # Windows
-.\.venv\Scripts\activate.bat
+.venv\Scripts\activate.bat
 ```
 - Install SpineWise requirements
 ```
