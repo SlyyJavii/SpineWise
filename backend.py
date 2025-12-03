@@ -480,7 +480,7 @@ initialize_folders()
 pygame.init()
 pygame.mixer.init()
 
-beep = pygame.mixer.Sound("bad_posture_alert.wav")
+beep = pygame.mixer.Sound("assets/bad_posture_alert.wav")
 beep.set_volume(notification_volume / 100.0)
 
 # globals for posture tracking
