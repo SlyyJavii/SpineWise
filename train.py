@@ -51,9 +51,7 @@ bundle = joblib.load("models/posture_lgbm_classifier.pkl")
 bundle["dataset_baseline_median"] = dict1
 bundle["dataset_baseline_iqr"] = dict2
 
-jj = {0: "hi", 1: "hello", 2: "ok"}
-
-#joblib.dump(bundle, "models/posture_lgbm_classifier.pkl")
+joblib.dump(bundle, "models/posture_lgbm_classifier.pkl")
 
 #bundle_path = "models/posture_lgbm_classifier.pkl"
 #joblib.dump(

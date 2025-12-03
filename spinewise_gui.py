@@ -520,7 +520,7 @@ class VideoThread(QThread):
                         pose_results.pose_landmarks[0],
                         face_results.face_landmarks if face_results.face_landmarks else None
                     )
-                    if result in ("good", "moderate", "bad"):
+                    if result is not None:
                         self.update_stats_signal.emit(result)
                     # send reco context for recommendation tab
                     ctx = get_recommendation_context()

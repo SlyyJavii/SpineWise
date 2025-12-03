@@ -187,11 +187,11 @@ def ml_predict_label_from_features(features_dict) -> str:
 
     _load_ml_once()
     if not _ML["loaded"] or _ML["model"] is None:
-        return features_dict.get("label", "good")  # fallback to current result
+        return features_dict.get("label", "Good Posture")  # fallback to current result
 
     window_df = record_frame(features_dict)
     if window_df is None:
-        return ""
+        return session_ctx["last_label"]
 
     # Model was trained on many engineered columns (means/std/etc)
     # for live usage we approximate that by aggregating a few seconds of per-frame data (2 s smoothing window)
@@ -210,11 +210,10 @@ def ml_predict_label_from_features(features_dict) -> str:
             cls_id = int(yhat[0])
         else:
             # no calibrator, use probabilities
-            if hasattr(model, "predict_proba"):
-                proba = model.predict_proba(window_df)
-            else:
-                logits = model.predict(window_df, raw_score=True)
-                proba = _softmax(logits, axis=1)
+            logits = model.predict(window_df, raw_score=True)
+            proba = _softmax(logits, axis=1)
+            session_ctx["proba"] = proba[0]
+
             cls_id = int(np.argmax(proba, axis=1)[0])
 
         if cls_id == 2:
@@ -225,6 +224,8 @@ def ml_predict_label_from_features(features_dict) -> str:
 
         final_z_scores = defaultdict(float)
         for feature, z_score in z_scores(window_df).to_dict(orient="list").items():
+            if type(feature) != str:
+                break
             final_z_scores[get_feature_base(feature)] += z_score[0]
 
         session_ctx["z_scores"] = final_z_scores
@@ -244,11 +245,12 @@ def ml_predict_label_from_features(features_dict) -> str:
             session_ctx["need_scores"] = need_scores
 
         # map id -> label string (bad/moderate/good)
-        id2lab = {0: "bad", 1: "moderate", 2: "good"}
-        return id2lab.get(cls_id, "moderate")
+        id2lab = {0: "Bad Posture", 1: "Moderate Posture", 2: "Good Posture"}
+        session_ctx["last_label"] = id2lab[cls_id]
+        return id2lab.get(cls_id, "Moderate Posture")
     except Exception as e:
         print(f"[BACKEND] ML live predict failed: {e}")
-        return "good"
+        return "Good Posture"
 
 def get_feature_base(feature):
     parts = feature.split("_")
