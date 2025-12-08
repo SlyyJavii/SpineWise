@@ -2457,6 +2457,7 @@ class App(QMainWindow):
         self.video_thread = VideoThread(show_landmarks=self.show_landmarks)
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.update_stats_signal.connect(self.update_stats)
+        self.video_thread.update_reco_context_signal.connect(self._on_reco_context)
         self.video_thread.start()
         self.start_button.setEnabled(False);
         self.stop_button.setEnabled(True)
