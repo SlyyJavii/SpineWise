@@ -15,7 +15,7 @@
 ## Screenshots of Project Progress
 
 ## Installation Guide
-### NOTE: Python 3.11+ preferred
+### NOTE: Python 3.10+ preferred
 - Clone the repo to your local machine 
 ```
 git clone https://github.com/SlyJavii/SpineWise.git
